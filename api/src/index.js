@@ -830,6 +830,151 @@ async function handleAggNews(which, params, env) {
 }
 
 // ============================================================
+// 选股器：读 KV 快照 → 内存过滤 → 返回
+// KV key: screener:{interval}:{region}（由 screener_precompute.py 写入）
+// KV value: JSON { "AAPL": { ma5:..., rsi14:..., ... }, ... }
+// ============================================================
+const SCREENER_OPS = {
+  gt: (a, b) => a > b,
+  gte: (a, b) => a >= b,
+  lt: (a, b) => a < b,
+  lte: (a, b) => a <= b,
+  eq: (a, b) => Math.abs(a - b) < 1e-6,
+};
+const SCREENER_BOOL_FIELDS = new Set([
+  "ma5_gt_ma10","ma10_gt_ma20","ma20_gt_ma60",
+  "macd_gt_signal","macd_gt_zero","price_gt_ma20","price_gt_ma60",
+  "rsi_oversold","rsi_overbought","volume_surge",
+]);
+
+async function handleScreener(params, env) {
+  const scope = (params.get("scope") || params.get("market") || "").toLowerCase();
+  if (!scope) {
+    return json({
+      usage: {
+        endpoint: `${API_BASE}/screener`,
+        description: "选股器：从 KV 快照中按技术指标条件过滤股票",
+        params: {
+          scope: "选股范围，如 daily:us / daily:cn / daily:hk / daily:etf",
+          ma5_gt: "MA5 > 指定值，如 ma5_gt=300",
+          rsi14_lt: "RSI14 < 指定值，如 rsi14_lt=30",
+          change_1d_gt: "日涨幅 > 指定百分比",
+          ma5_gt_ma10: "布尔：MA5 > MA10（多头）",
+          macd_gt_signal: "布尔：MACD 金叉",
+          rsi_oversold: "布尔：RSI14 < 30",
+          rsi_overbought: "布尔：RSI14 > 70",
+          volume_surge: "布尔：成交量 > 均量×2",
+          sort: "排序字段，默认 change_1d",
+          order: "asc / desc（默认 desc）",
+          limit: "返回条数，默认 50，最大 500",
+        },
+        example: `${API_BASE}/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30&sort=change_1d&limit=20`,
+        note: "快照由 GitHub Actions 定时预计算写入 KV（screener_precompute.py）",
+      },
+    });
+  }
+
+  if (!env || !env.STATIC_KV) {
+    return error("KV 未绑定（STATIC_KV），选股器不可用", 503);
+  }
+
+  const kvKey = `screener:${scope}`;
+  let snapshotText;
+  try {
+    snapshotText = await env.STATIC_KV.get(kvKey);
+  } catch (e) {
+    return error(`KV 读取失败: ${e.message}`, 502);
+  }
+  if (!snapshotText) {
+    return error(`无选股快照: ${kvKey}。请先运行 screener_precompute.py`, 404);
+  }
+
+  let snapshot;
+  try {
+    snapshot = JSON.parse(snapshotText);
+  } catch {
+    return error(`快照 JSON 解析失败: ${kvKey}`, 502);
+  }
+
+  const symbols = Object.keys(snapshot);
+  if (symbols.length === 0) {
+    return json({ scope, count: 0, results: [], note: "快照为空" });
+  }
+
+  // 收集过滤条件
+  const numericFilters = [];
+  const boolFilters = [];
+  for (const [key, value] of params.entries()) {
+    if (["scope","market","sort","order","limit"].includes(key)) continue;
+    if (SCREENER_BOOL_FIELDS.has(key)) {
+      if (value === "true" || value === "1") boolFilters.push(key);
+      continue;
+    }
+    const parts = key.split("_");
+    if (parts.length >= 2) {
+      const op = parts[parts.length - 1];
+      if (SCREENER_OPS[op]) {
+        const field = parts.slice(0, -1).join("_");
+        const numVal = parseFloat(value);
+        if (!isNaN(numVal)) numericFilters.push({ field, op, value: numVal });
+      }
+    }
+  }
+
+  // 过滤
+  const results = [];
+  for (const symbol of symbols) {
+    const data = snapshot[symbol];
+    if (!data) continue;
+    let pass = true;
+
+    for (const f of numericFilters) {
+      const val = data[f.field];
+      if (val === undefined || val === null || isNaN(val)) { pass = false; break; }
+      if (!SCREENER_OPS[f.op](val, f.value)) { pass = false; break; }
+    }
+    if (!pass) continue;
+
+    for (const cond of boolFilters) {
+      switch (cond) {
+        case "ma5_gt_ma10": if (!(data.ma5 > data.ma10)) pass = false; break;
+        case "ma10_gt_ma20": if (!(data.ma10 > data.ma20)) pass = false; break;
+        case "ma20_gt_ma60": if (!(data.ma20 > data.ma60)) pass = false; break;
+        case "macd_gt_signal": if (!(data.macd > data.macd_signal)) pass = false; break;
+        case "macd_gt_zero": if (!(data.macd > 0)) pass = false; break;
+        case "price_gt_ma20": if (!(data.close > data.ma20)) pass = false; break;
+        case "price_gt_ma60": if (!(data.close > data.ma60)) pass = false; break;
+        case "rsi_oversold": if (!(data.rsi14 < 30)) pass = false; break;
+        case "rsi_overbought": if (!(data.rsi14 > 70)) pass = false; break;
+        case "volume_surge": if (!(data.volume > data.volume_ma20 * 2)) pass = false; break;
+      }
+      if (!pass) break;
+    }
+
+    if (pass) results.push({ symbol, ...data });
+  }
+
+  // 排序
+  const sortField = params.get("sort") || "change_1d";
+  const sortOrder = (params.get("order") || "desc").toLowerCase();
+  results.sort((a, b) => {
+    const av = a[sortField], bv = b[sortField];
+    if (av === undefined || av === null) return 1;
+    if (bv === undefined || bv === null) return -1;
+    return sortOrder === "asc" ? av - bv : bv - av;
+  });
+
+  const limit = Math.min(parseInt(params.get("limit") || "50", 10), 500);
+  const page = results.slice(0, limit);
+
+  return json({
+    scope, total: symbols.length, matched: results.length,
+    count: page.length, limit, sort: sortField, order: sortOrder,
+    results: page,
+  });
+}
+
+// ============================================================
 // 状态
 // ============================================================
 function handleStatus(request) {
@@ -850,6 +995,7 @@ function handleStatus(request) {
       universe: `${API_BASE}/universe`,
       indices: `${API_BASE}/indices`,
       symbols: `${API_BASE}/symbols`,
+      screener: `${API_BASE}/screener`,
     },
     intervals: Object.keys(INTERVAL_DIR),
     regions: Object.keys(REGION_LABEL),
@@ -1374,6 +1520,7 @@ const CACHE_TTL = {
   "news-yh": 60, // Yahoo HK 头条：每 5 分钟采集，缓存 60s
   "news-em": 30, // 东方财富 7x24h：每 5 分钟采集但内容更新快，缓存 30s
   "news-all": 30,
+  screener: 15, // 选股快照：KV 毫秒级读，缓存 15s 平衡新鲜与额度
 };
 
 export default {
@@ -1415,6 +1562,8 @@ export default {
         edgeCache(url.href, ttl, env, ctx, () => handleAggNews("em", params, env)),
       "/news": (ttl) =>
         edgeCache(url.href, ttl, env, ctx, () => handleAggNews("all", params, env)),
+      "/screener": (ttl) =>
+        edgeCache(url.href, ttl, env, ctx, () => handleScreener(params, env)),
     };
 
     const task = routes[path];
@@ -1423,7 +1572,7 @@ export default {
     }
 
     return error(
-      "Not found. Use /, /kline, /price, /download, /quote, /news, /news-yh, /news-em, /universe, /indices, /symbols, /status",
+      "Not found. Use /, /kline, /price, /download, /quote, /news, /news-yh, /news-em, /universe, /indices, /symbols, /screener, /status",
       404
     );
   },
