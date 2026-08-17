@@ -1,0 +1,142 @@
+name: Fetch Meta (Media Info)
+
+# 媒体/行情快照信息采集（独立于增量同步）。
+# 运行 scripts/fetch_meta.py：采集各股票的名称/币种/交易所/52周高低/实时价快照，
+# 存为 {region}/meta/{symbol}.json → R2，供 API 的 /quote 和 /price 使用。
+# 每 12 小时定时刷新，也可手动触发单区域。
+
+on:
+  schedule:
+    # 每 12 小时刷新一次基本面快照（UTC 00:00 / 12:00 = 北京时间 08:00 / 20:00）
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "限定区域：all=全部, us/cn/hk/kr/etf/cn_etf=单区域"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - us
+          - cn
+          - hk
+          - kr
+          - etf
+          - cn_etf
+
+env:
+  PYTHON_VERSION: "3.11"
+
+# 防止重复手动触发并行运行（meta 写同一批 key）
+concurrency:
+  group: fetch-meta
+  cancel-in-progress: true
+
+jobs:
+  fetch-meta-cn:
+    name: Meta · A股 (batch ${{ matrix.batch }})
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.region == 'all' || github.event.inputs.region == 'cn' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        batch: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch meta -> R2 (cn)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          FETCH_CONCURRENCY: "8"
+        run: python scripts/fetch_meta.py --region cn --batch ${{ matrix.batch }} --batches 5
+
+  fetch-meta-us:
+    name: Meta · 美股Russell1000
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.region == 'all' || github.event.inputs.region == 'us' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch meta -> R2 (us)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          FETCH_CONCURRENCY: "10"
+        run: python scripts/fetch_meta.py --region us
+
+  fetch-meta-hk-kr:
+    name: Meta · 恒生 + KOSPI200
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.region == 'all' || github.event.inputs.region == 'hk' || github.event.inputs.region == 'kr' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch meta -> R2 (hk + kr)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python scripts/fetch_meta.py --region hk
+          python scripts/fetch_meta.py --region kr
+
+  fetch-meta-etf:
+    name: Meta · 美股ETF (batch ${{ matrix.batch }})
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.region == 'all' || github.event.inputs.region == 'etf' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        batch: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch meta -> R2 (etf)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          FETCH_CONCURRENCY: "10"
+        run: python scripts/fetch_meta.py --region etf --batch ${{ matrix.batch }} --batches 3
+
+  fetch-meta-cn-etf:
+    name: Meta · 中国ETF
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.region == 'all' || github.event.inputs.region == 'cn_etf' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch meta -> R2 (cn_etf)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          FETCH_CONCURRENCY: "10"
+        run: python scripts/fetch_meta.py --region cn_etf

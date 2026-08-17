@@ -1,0 +1,39 @@
+name = "market-data-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# 自定义域名已通过 Cloudflare Workers 面板绑定（stockapi.365200.xyz → market-data-api）
+# 此处不配置 routes，避免部署时需要 Zone 权限。域名绑定在面板中管理。
+# 如需绑定，可在面板 Custom Domains 中添加：
+#   stockapi.365200.xyz → market-data-api
+
+# 免费计划：10 万请求/天
+# 部署后接口地址：https://stockapi.365200.xyz/kline
+# 首页（项目介绍 + API 文档）：https://stockapi.365200.xyz/
+
+# R2 存储绑定：数据存放在 Cloudflare R2（bucket 名与采集端 R2_BUCKET 一致）
+[[r2_buckets]]
+binding = "MARKET_DATA_R2"
+bucket_name = "stocksmarkets"
+
+# 边缘缓存：Worker 通过 Cache API（caches.default）将高频接口结果缓存在边缘，
+# 命中时短路返回，不执行业务逻辑、不读 R2。有效降低 Worker CPU/请求额度与 R2 读次数。
+# - kline / quote / news / universe / indices / symbols / download：TTL 见 src/index.js CACHE_TTL
+#   （历史数据 60s，元数据/清单 300s）
+# - price（实时）：只缓存 15s，平衡实时性与额度
+# - 无需在此额外配置缓存规则，TTL 由代码里的 Cache-Control 控制；
+#   如需对自定义域开启更强 CDN 层缓存，可在面板 Cache Rules 中添加：
+#     stockapi.365200.xyz/*kline* 等 按 head，浏览器缓存 0 分钟，边缘缓存 1 分钟
+
+# KV 存储绑定：静态清单（universe/indices）迁至 KV
+# KV 读取毫秒级、不计 Worker CPU、不消耗 R2 读额度。
+# 采集端写 R2 的同时双写 KV；Worker 优先读 KV，miss 时 fallback 到 R2。
+# 面板创建 KV namespace 后，将下方 id 替换为实际值（或用 wrangler kv namespace create 创建）。
+# 创建命令：cd api && wrangler kv namespace create STATIC_KV
+# 然后将返回的 id 填入下方 id 字段。
+[[kv_namespaces]]
+binding = "STATIC_KV"
+id = "c52b429797514cc49a16b2d7722549d4"
+
+[observability]
+enabled = true

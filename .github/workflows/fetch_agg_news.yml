@@ -1,0 +1,43 @@
+name: Fetch Aggregate News (Yahoo HK + Eastmoney 7x24h)
+
+# 聚合新闻采集：
+#   scripts/fetch_agg_news.py
+#     1) Yahoo HK latest-news       → R2 news/yh.json   (香港/亚洲市场头条，约20条)
+#     2) 东方财富 newsapi LivesList → R2 news/em.json   (A股 7x24h 快讯，80 条)
+#
+# 写入前用 MD5 指纹对比：只有内容变化才上传，避免浪费 R2 Class A 配额。
+# 注意：Yahoo 的 rel_time（"19分前"）随时间走，所以 yh.json 指纹会随采集时间更新。
+
+on:
+  schedule:
+    # 东方财富 7x24h 更新频繁，每 5 分钟刷一次。
+    # Yahoo HK 头条更新较慢，每次一起跑即可。
+    # cron 每 5 分钟一次：UTC。北京 GMT+8。
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.11"
+
+concurrency:
+  group: fetch-agg-news
+  cancel-in-progress: true
+
+jobs:
+  fetch-agg-news:
+    name: Aggregate News (Yahoo HK + Eastmoney)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch aggregate news → R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: python scripts/fetch_agg_news.py
