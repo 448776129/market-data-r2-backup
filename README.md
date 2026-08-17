@@ -67,7 +67,9 @@ Cloudflare Worker（stockapi.365200.xyz）
 │   ├── yahoo_meta.py             # Yahoo meta 采集（名称/行情快照 + 板块行业）
 │   ├── yahoo_news.py             # Yahoo search 新闻采集（经反代）
 │   ├── build_universe.py         # 从本地文件生成各区域股票清单
-│   └── marketlib.py              # 共享工具（列表解析 + 分批 + 交易时段）
+│   ├── marketlib.py              # 共享工具（列表解析 + 分批 + 交易时段）
+│   ├── indicators.py             # 技术指标计算引擎（纯计算：MA/EMA/MACD/RSI/KDJ/布林带等）
+│   └── test_indicators.py        # 指标交叉验证测试（与 pandas_ta 逐项比对）
 ├── api/                          # Cloudflare Worker 动态接口
 │   ├── src/index.js              # 从 R2 读取（fallback GitHub raw）
 │   └── wrangler.toml             # R2 binding 配置
@@ -78,6 +80,66 @@ Cloudflare Worker（stockapi.365200.xyz）
     ├── sync_data.yml             # 增量同步（每 30 分钟）
     └── fetch_meta.yml            # meta 采集（手动）
 ```
+
+## 技术指标引擎（新增）
+
+`scripts/indicators.py` 提供纯计算技术指标，供选股器预计算使用：
+
+| 指标 | 函数 | 默认参数 |
+| ---- | ---- | ---- |
+| 简单移动平均 | `ma(close, period)` | 5/10/20/60 |
+| 指数移动平均 | `ema(close, period)` | 12/26（TA Lib 风格，SMA 种子） |
+| MACD | `macd(close)` | 12/26/9 |
+| RSI | `rsi(close, period)` | 14（Wilder 平滑） |
+| KDJ | `kdj(high, low, close)` | 9/3/3 |
+| 布林带 | `bollinger(close)` | 20, 2.0 (ddof=1) |
+| 成交量均线 | `volume_ma(volume, period)` | 5/20 |
+| 涨跌幅 | `price_change(close, periods)` | 1日/5日/20日 |
+| 全套指标 | `compute_all(df)` | MA/EMA/MACD/RSI/KDJ/BB/成交量/涨跌幅 |
+
+**正确性保证**：`scripts/test_indicators.py` 用 AAPL 真实日K + 合成分钟数据，
+与 `pandas_ta` 逐项交叉验证（35/35 通过，max_diff ≤ 1.1e-13），
+并覆盖边界条件（数据不足返回全 NaN、单元素/空数据不崩溃）。
+
+```bash
+# 运行指标验证
+pip install -r requirements.txt
+python scripts/test_indicators.py
+```
+
+> 计算口径与 pandas_ta 完全对齐（EMA 用 SMA 种子 + adjust=False；
+> RSI 用 `ewm(alpha=1/n, adjust=False)`；KDJ 用 `pd_rma`；布林带 ddof=1）。
+
+## 选股器架构（设计稿）
+
+面向"减少 Workers 额度 + 日K/分钟K选股"的 KV 快照方案：
+
+```
+┌─ GH Actions 每日 ─────────────────────────────┐
+│  全量日K/小时K同步 → 计算指标                  │
+│  → 写 KV: screener:daily:{region}             │
+├───────────────────────────────────────────────┤
+│  额度：约 150 分钟/月                          │
+└───────────────────────────────────────────────┘
+
+┌─ GH Actions 每 10 分钟 ───────────────────────┐
+│  候选池分钟K同步 → 计算指标                    │
+│  → 写 KV: screener:watchlist:{interval}       │
+├───────────────────────────────────────────────┤
+│  额度：约 720 分钟/月                          │
+└───────────────────────────────────────────────┘
+
+┌─ Worker ──────────────────────────────────────┐
+│  /screener → 读 KV 快照 → 内存过滤 → 返回      │
+│  1 次 KV 读，<1ms CPU，0 次 R2 读              │
+└───────────────────────────────────────────────┘
+```
+
+要点：
+- **KV 存快照**（全量读 + 内存过滤），不逐只查 R2（免费 KV 写入 1000 次/天足够）
+- **日K选股**：每日更新一次，覆盖全市场
+- **分钟K选股**：候选池 + 高频更新，实时监控
+- 存储优化规划：分钟K按时间分区（`{date}.csv.gz` 一文件一市场一天），文件数从 3 万降至 ~120
 
 ## 配置（首次部署）
 

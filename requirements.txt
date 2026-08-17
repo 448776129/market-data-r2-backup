@@ -6,3 +6,6 @@ boto3==1.43.72
 # 一次性运行 scripts/build_universe.py 转换本地持仓文件所需（GitHub Actions 不需要）
 openpyxl==3.1.5
 xlrd==2.0.1
+
+# 指标计算与交叉验证
+pandas_ta==0.4.71b0
