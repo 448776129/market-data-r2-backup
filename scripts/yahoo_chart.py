@@ -106,6 +106,113 @@ def fetch_kline(
     return pd.DataFrame()
 
 
+def fetch_kline_pure(
+    symbol: str,
+    interval: str = "1m",
+    period: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    prepost: bool = True,
+    retries: int | None = None,
+    delay: float | None = None,
+) -> list[dict]:
+    """纯 Python 版 K 线拉取（无 pandas/numpy 依赖）。
+
+    返回 list[dict]，每项:
+        {"ts": int, "datetime": "2026-08-18 09:30:00", "open": float, "high": float,
+         "low": float, "close": float, "adjclose": float, "volume": float}
+    ts 为 UTC 秒级时间戳（naive，与现有入库文件一致）。
+
+    失败重试后仍失败则抛出异常。
+    """
+    params: dict[str, Any] = {"interval": interval, "includePrePost": str(prepost).lower()}
+    if period:
+        params["range"] = period
+    else:
+        now = int(time.time())
+        if start:
+            params["period1"] = _parse_ts(start)
+        else:
+            params["period1"] = now - 6 * 30 * 86400
+        if end:
+            params["period2"] = _parse_ts(end)
+        else:
+            params["period2"] = now
+
+    retries = config.MAX_RETRIES if retries is None else retries
+    delay = config.REQUEST_DELAY if delay is None else delay
+
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            url = _build_url(symbol, interval, params)
+            data = _request(url)
+            return _parse_chart_pure(data, symbol, interval)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < retries - 1:
+                wait = delay * (2**attempt)
+                print(f"    重试 {attempt+1}/{retries-1}（等 {wait:.0f}s）：{exc}", flush=True)
+                time.sleep(wait)
+    if last_exc is not None:
+        raise last_exc
+    return []
+
+
+def _parse_ts(value: str) -> int:
+    """把 YYYY-MM-DD 或 YYYY-MM-DD HH:MM 转成 UTC 时间戳。"""
+    import calendar
+    if " " in value:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M")
+    else:
+        dt = datetime.strptime(value, "%Y-%m-%d")
+    return int(calendar.timegm(dt.timetuple()))
+
+
+def _parse_chart_pure(data: dict, symbol: str, interval: str) -> list[dict]:
+    """将 chart API 返回的 JSON 解析为纯 Python list[dict]。"""
+    result = (data.get("chart") or {}).get("result")
+    if not result:
+        err = (data.get("chart") or {}).get("error")
+        raise RuntimeError(f"{symbol} chart API 无数据: {err}")
+
+    res = result[0]
+    ts = res.get("timestamp") or []
+    quote = (res.get("indicators") or {}).get("quote") or []
+    adjclose = ((res.get("indicators") or {}).get("adjclose") or [{}])[0]
+    if not ts or not quote:
+        return []
+
+    q = quote[0]
+    opens = q.get("open") or []
+    highs = q.get("high") or []
+    lows = q.get("low") or []
+    closes = q.get("close") or []
+    vols = q.get("volume") or []
+    adjcloses = adjclose.get("adjclose") or [None] * len(ts)
+
+    rows: list[dict] = []
+    for i, t in enumerate(ts):
+        close = closes[i] if i < len(closes) else None
+        if close is None:
+            continue
+        if interval == "1d":
+            dt_str = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
+        else:
+            dt_str = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        rows.append({
+            "ts": t,
+            "datetime": dt_str,
+            "open": float(opens[i]) if i < len(opens) else None,
+            "high": float(highs[i]) if i < len(highs) else None,
+            "low": float(lows[i]) if i < len(lows) else None,
+            "close": float(close),
+            "adjclose": float(adjcloses[i]) if i < len(adjcloses) and adjcloses[i] is not None else None,
+            "volume": float(vols[i]) if i < len(vols) else 0.0,
+        })
+    return rows
+
+
 def _parse_chart(data: dict, symbol: str, interval: str) -> pd.DataFrame:
     """将 chart API 返回的 JSON 解析为标准 OHLCV DataFrame。"""
     result = (data.get("chart") or {}).get("result")
