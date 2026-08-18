@@ -16,6 +16,51 @@
 - **增量查重**：休市/数据新鲜自动跳过请求，减少 Actions 浪费
 - **R2 高效入库**：gzip 压缩 + 多线程并发上传
 - **动态接口**：Worker 免费提供 JSON API，无需 Key
+- **选股器**：技术指标预计算 → KV 快照 → Worker 毫秒级选股过滤（MA/MACD/RSI/KDJ/布林带等）
+
+## 线上接口
+
+Worker 部署在 Cloudflare Workers，当前地址：
+```
+https://market-data-api.1278972617.workers.dev
+```
+自定义域名（如已绑定）：`https://stockapi.365200.xyz`
+
+### 接口一览
+
+| 接口 | 功能 | 示例 |
+| ---- | ---- | ---- |
+| `GET /` | 项目首页 + API 文档 | `/` |
+| `GET /kline` | K 线数据（日K/1m/5m/15m/30m/1h） | `/kline?symbol=AAPL&interval=1d&limit=5` |
+| `GET /price` | 实时价格（当场调取 Yahoo） | `/price?symbol=AAPL` |
+| `GET /download` | 下载 gzip 原始 CSV | `/download?symbol=AAPL&interval=1h` |
+| `GET /quote` | 个股元数据 | `/quote?symbol=0700.HK` |
+| `GET /news` | 聚合新闻（雅虎+东方财富） | `/news?limit=50` |
+| `GET /universe` | 指数成分股清单 | `/universe?index=csi300` |
+| `GET /indices` | 全部可用指数 | `/indices` |
+| `GET /symbols` | 按区域列出股票代码 | `/symbols?region=us&limit=5` |
+| `GET /screener` | 选股器（读 KV 快照过滤） | `/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30` |
+| `GET /status` | 服务配置信息 | `/status` |
+
+### 选股器用法
+
+```bash
+# 查看选股器参数说明
+curl "https://market-data-api.1278972617.workers.dev/screener"
+
+# 日K选股：MA5>MA10（多头）且 RSI14<30（超卖）
+curl "https://market-data-api.1278972617.workers.dev/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30&sort=change_1d&limit=20"
+
+# 数值条件过滤
+curl "https://market-data-api.1278972617.workers.dev/screener?scope=daily:us&ma5_gt=300&change_1d_gt=2"
+```
+
+选股器支持的过滤条件：
+- **数值**：`ma5_gt=300` / `rsi14_lt=30` / `change_1d_gt=2`（支持 gt/gte/lt/lte/eq）
+- **布尔**：`ma5_gt_ma10=true` / `macd_gt_signal=true` / `rsi_oversold=true` / `volume_surge=true`
+- **排序**：`sort=change_1d` / `order=desc` / `limit=20`（最大 500）
+
+> 选股快照由 GitHub Actions 每 30 分钟预计算写入 KV。首次使用需等 Actions 跑完全量采集 + `screener-precompute` job。
 
 ## 股票范围
 
