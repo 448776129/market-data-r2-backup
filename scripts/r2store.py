@@ -26,8 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
-import boto3
-from botocore.config import Config
+import r2s3  # noqa: E402 - 极简 R2 S3 客户端（urllib + SigV4，替代 boto3）
 
 # 并发上传线程数（R2 免费额度下平衡速度与限流）
 UPLOAD_WORKERS = 16
@@ -42,16 +41,8 @@ def _env(name: str) -> str:
 
 
 def get_client():
-    """构建 R2 S3 客户端（每次调用新建，避免线程安全问题）。"""
-    account_id = _env("R2_ACCOUNT_ID")
-    return boto3.client(
-        "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=_env("R2_ACCESS_KEY_ID"),
-        aws_secret_access_key=_env("R2_SECRET_ACCESS_KEY"),
-        region_name="auto",
-        config=Config(signature_version="s3v4", max_pool_connections=UPLOAD_WORKERS + 4),
-    )
+    """兼容占位：R2 S3 客户端（r2s3 无状态，返回 None 即可）。"""
+    return None
 
 
 def get_bucket() -> str:
@@ -68,16 +59,8 @@ def _gzip_bytes(data: bytes) -> bytes:
 
 def put_bytes(key: str, data: bytes, content_type: str = "text/csv; charset=utf-8", compressed: bool = False):
     """写入单个对象。compressed=True 时数据为 gzip 压缩内容，附带 Content-Encoding。"""
-    s3 = get_client()
-    kwargs: dict[str, Any] = {
-        "Bucket": get_bucket(),
-        "Key": key,
-        "Body": data,
-        "ContentType": content_type,
-    }
-    if compressed:
-        kwargs["ContentEncoding"] = "gzip"
-    s3.put_object(**kwargs)
+    encoding = "gzip" if compressed else None
+    r2s3.put_obj(key, data, content_type=content_type, content_encoding=encoding)
 
 
 def put_csv(key: str, csv_text: str):
@@ -99,10 +82,7 @@ def put_universe(region: str, csv_text: str):
 def get_bytes(key: str) -> bytes | None:
     """读取对象原始字节；不存在返回 None。"""
     try:
-        resp = get_client().get_object(Bucket=get_bucket(), Key=key)
-        return resp["Body"].read()
-    except get_client().exceptions.NoSuchKey:
-        return None
+        return r2s3.get_obj(key)
     except Exception as exc:  # noqa: BLE001
         if "404" in str(exc) or "NoSuchKey" in str(exc):
             return None
@@ -125,20 +105,22 @@ def _is_gzip(data: bytes) -> bool:
 
 def exists(key: str) -> bool:
     """判断对象是否存在。"""
-    s3 = get_client()
     try:
-        s3.head_object(Bucket=get_bucket(), Key=key)
-        return True
+        return r2s3.exists(key)
     except Exception:  # noqa: BLE001
         return False
 
 
 def last_modified(key: str) -> datetime | None:
     """返回对象最后修改时间；不存在返回 None。"""
-    s3 = get_client()
     try:
-        resp = s3.head_object(Bucket=get_bucket(), Key=key)
-        return resp.get("LastModified")
+        meta = r2s3.head_obj(key)
+        if not meta:
+            return None
+        lm = meta.get("Last-Modified")
+        if lm:
+            return datetime.strptime(lm, "%a, %d %b %Y %H:%M:%S GMT").replace(tzinfo=timezone.utc)
+        return None
     except Exception:  # noqa: BLE001
         return None
 

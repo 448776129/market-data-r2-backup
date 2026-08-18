@@ -1,11 +1,9 @@
 # 采集运行时依赖（GitHub Actions / 生产环境）
-yfinance==0.2.44
-pandas
-boto3==1.43.72
+# yfinance: 未使用（yahoo_chart.py 直接用 urllib 调 chart API）
+# boto3:    已移除（r2store.py 改用 scripts/r2s3.py 纯标准库 SigV4）
+# pandas_ta: 仅本地指标验证用，已移至 requirements-dev.txt
+pandas>=2.2
 
 # 一次性运行 scripts/build_universe.py 转换本地持仓文件所需（GitHub Actions 不需要）
-openpyxl==3.1.5
-xlrd==2.0.1
-
-# 指标交叉验证（采集后验证再入库）
-pandas_ta>=0.4.71b0
+# openpyxl==3.1.5
+# xlrd==2.0.1
