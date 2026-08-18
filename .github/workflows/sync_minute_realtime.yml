@@ -1,19 +1,21 @@
 name: Sync Minute K (Realtime)
 
-# 高频分钟K同步：沪深300 + 纳指100，每 2 分钟一次
-# 公开仓库 Actions 额度无限，适合高频采集
+# 高频分钟K同步：沪深300 + 纳指100，每 5 分钟一次
+# 公开仓库 Actions 额度无限
 #
 # 流程：
-#   1. 拉取最新 1m K线（含延长时段）→ gzip 写入 R2
+#   1. 直连 Yahoo 拉取最新 1m K线（含延长时段）→ gzip 写入 R2
 #   2. 重采样 5m/15m/30m → 写入 R2
 #   3. 计算选股指标 → 写入 KV 快照
 #
-# 仅处理交易时段，休市自动跳过（减少无效请求）
+# 直连 Yahoo（YAHOO_DIRECT=1）：GitHub Actions 海外运行无 403，
+#   并避开反代 img2.365200.xyz 的限流（之前导致新闻 429）。
+# 仅处理交易时段，休市自动跳过。
 
 on:
   schedule:
-    # 每 2 分钟（GitHub Actions cron 最低 5 分钟，但 2 分钟表达式会近似每 5 分钟触发）
-    - cron: "*/2 * * * *"
+    # 每 5 分钟（GitHub Actions cron 最低 5 分钟）
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       index:
@@ -54,6 +56,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
           FETCH_CONCURRENCY: "10"
+          YAHOO_DIRECT: "1"
         run: python scripts/sync_minute_realtime_pure.py --index csi300 --region cn
 
   sync-nasdaq100:
@@ -75,5 +78,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
           FETCH_CONCURRENCY: "10"
+          YAHOO_DIRECT: "1"
         run: python scripts/sync_minute_realtime_pure.py --index nasdaq100 --region us
 

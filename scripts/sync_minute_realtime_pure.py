@@ -264,7 +264,12 @@ def _fetch_kline_pure(
 
     origin = "https://query1.finance.yahoo.com/v8/finance/chart/"
     raw = origin + urllib.parse.quote(symbol) + "?" + urllib.parse.urlencode(params)
-    url = f"{config.YAHOO_CHART_PROXY.rstrip('/')}/{raw}"
+    # 直连开关：GitHub Actions 在海外直连 Yahoo 无 403；本地国内环境需走反代。
+    # 环境变量 YAHOO_DIRECT=1 时直连，否则走 config.YAHOO_CHART_PROXY 反代。
+    if os.environ.get("YAHOO_DIRECT") == "1":
+        url = raw
+    else:
+        url = f"{config.YAHOO_CHART_PROXY.rstrip('/')}/{raw}"
 
     last_exc: Exception | None = None
     for attempt in range(config.MAX_RETRIES):
