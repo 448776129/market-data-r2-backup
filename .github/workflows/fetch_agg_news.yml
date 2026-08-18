@@ -10,10 +10,8 @@ name: Fetch Aggregate News (Yahoo HK + Eastmoney 7x24h)
 
 on:
   schedule:
-    # 东方财富 7x24h 更新频繁，每 5 分钟刷一次。
-    # Yahoo HK 头条更新较慢，每次一起跑即可。
-    # cron 每 5 分钟一次：UTC。北京 GMT+8。
-    - cron: "*/5 * * * *"
+    # 每 30 分钟定时采集；实时新闻由 Worker 的 /news-{yh,em}/live 接口直接拉取源站
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 env:

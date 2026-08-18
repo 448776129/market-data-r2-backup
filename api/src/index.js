@@ -703,6 +703,130 @@ async function handleSymbols(params, env) {
 }
 
 // ============================================================
+// 实时新闻（当场调取源站，不走缓存，结果入库 KV）
+// 用法：
+//   GET /news-yh/live    → 实时拉取雅虎香港头条并入库
+//   GET /news-em/live    → 实时拉取东方财富 7x24h 并入库
+// ============================================================
+
+const EASTMONEY_API = "https://newsapi.eastmoney.com/kuaixun/v1/getlist_102_ajaxResult_80_1_.html";
+const YAHOO_HK_URL = "https://hk.finance.yahoo.com/topic/latest-news/";
+
+async function handleLiveNews(which, params, env, ctx) {
+  // 1) 实时拉取源站
+  let raw, contentType;
+  try {
+    if (which === "em") {
+      const url = `${YAHOO_CHART_PROXY}/${EASTMONEY_API}`;
+      const resp = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Referer": "https://kuaixun.eastmoney.com/",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      });
+      if (!resp.ok) throw new Error(`Eastmoney HTTP ${resp.status}`);
+      raw = await resp.text();
+      contentType = "eastmoney";
+    } else if (which === "yh") {
+      const url = `${YAHOO_CHART_PROXY}/${YAHOO_HK_URL}`;
+      const resp = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+          "Accept": "text/html,application/xhtml+xml",
+        },
+      });
+      if (!resp.ok) throw new Error(`Yahoo HK HTTP ${resp.status}`);
+      raw = await resp.text();
+      contentType = "yahoo_html";
+    } else {
+      return error("Unknown news source", 400);
+    }
+  } catch (e) {
+    return error(`实时新闻拉取失败: ${e.message}`, 502);
+  }
+
+  // 2) 解析
+  let newsData;
+  try {
+    if (contentType === "eastmoney") {
+      // 东财返回格式：var ajaxResult={...} ;
+      const m = raw.match(/ajaxResult\s*=\s*(\{.*\})\s*;?\s*$/s);
+      if (!m) throw new Error("Eastmoney 返回格式异常");
+      const parsed = JSON.parse(m[1]);
+      const lives = parsed.LivesList || [];
+      const items = lives.map(n => ({
+        id: n.id,
+        title: n.title || n.simtitle || "",
+        digest: n.digest || n.simdigest || "",
+        showtime: n.showtime || "",
+        pub_ts: n.sort ? parseInt(String(n.sort).slice(0, 10)) : null,
+        url_pc: n.url_w || null,
+        url_mobile: n.url_m || null,
+        editor: n.editor_name || "",
+        source: "东方财富 7x24h",
+      }));
+      newsData = { source: "eastmoney", count: items.length, news: items };
+    } else {
+      // Yahoo HK：HTML 解析（提取标题 + 链接）
+      const items = [];
+      const seenUrls = new Set();
+      const cardRe2 = /<a [^>]*href="(https?:\/\/hk\.finance\.yahoo\.com\/news\/[^"]+\.html[^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+      let m;
+      while ((m = cardRe2.exec(raw)) !== null) {
+        const url = m[1];
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+        const title = m[2].replace(/<[^>]+>/g, "").trim();
+        if (title.length < 4) continue;
+        items.push({
+          title,
+          url,
+          publisher: null,
+          rel_time: null,
+          pub_ts: null,
+          source: "Yahoo Finance HK",
+        });
+      }
+      // 尝试提取时间和来源
+      for (const item of items) {
+        const idx = raw.indexOf(item.url);
+        if (idx > 0) {
+          const snippet = raw.slice(Math.max(0, idx - 400), idx + 200);
+          const pubM = snippet.match(/<span class="publisher">(.*?)<\/span>/s);
+          if (pubM) item.publisher = pubM[1].replace(/<[^>]+>/g, "").trim();
+          const tmM = snippet.match(/<span class="published-date">(.*?)<\/span>/s);
+          if (tmM) item.rel_time = tmM[1].replace(/<[^>]+>/g, "").trim();
+        }
+      }
+      newsData = { source: "yahoo_hk", count: items.length, news: items };
+    }
+  } catch (e) {
+    return error(`新闻解析失败: ${e.message}`, 502);
+  }
+
+  // 3) 入库 KV（后续请求走缓存，不用再实时拉）
+  if (env && env.STATIC_KV) {
+    const kvKey = `news:${which}:live`;
+    const kvValue = JSON.stringify(newsData, null, 2);
+    ctx.waitUntil(env.STATIC_KV.put(kvKey, kvValue));
+  }
+
+  // 4) 返回
+  const limit = Math.min(parseInt(params.get("limit") || "20", 10), 80);
+  const list = (newsData.news || []).slice(0, limit);
+  return json({
+    source: newsData.source,
+    total: newsData.count,
+    count: list.length,
+    limit,
+    live: true,
+    items: list,
+  });
+}
+
+// ============================================================
 // 聚合新闻
 //   /news-yh → 雅虎香港财经头条（繁体）
 //   /news-em → 东方财富 7x24h 快讯（简体）
@@ -992,6 +1116,8 @@ function handleStatus(request) {
       news: `${API_BASE}/news`,
       "news-yh": `${API_BASE}/news-yh`,
       "news-em": `${API_BASE}/news-em`,
+      "news-yh/live": `${API_BASE}/news-yh/live`,
+      "news-em/live": `${API_BASE}/news-em/live`,
       universe: `${API_BASE}/universe`,
       indices: `${API_BASE}/indices`,
       symbols: `${API_BASE}/symbols`,
@@ -1562,6 +1688,10 @@ export default {
         edgeCache(url.href, ttl, env, ctx, () => handleAggNews("em", params, env)),
       "/news": (ttl) =>
         edgeCache(url.href, ttl, env, ctx, () => handleAggNews("all", params, env)),
+      "/news-yh/live": () =>
+        handleLiveNews("yh", params, env, ctx),
+      "/news-em/live": () =>
+        handleLiveNews("em", params, env, ctx),
       "/screener": (ttl) =>
         edgeCache(url.href, ttl, env, ctx, () => handleScreener(params, env)),
     };
@@ -1572,7 +1702,7 @@ export default {
     }
 
     return error(
-      "Not found. Use /, /kline, /price, /download, /quote, /news, /news-yh, /news-em, /universe, /indices, /symbols, /screener, /status",
+      "Not found. Use /, /kline, /price, /download, /quote, /news, /news-yh, /news-em, /news-yh/live, /news-em/live, /universe, /indices, /symbols, /screener, /status",
       404
     );
   },
