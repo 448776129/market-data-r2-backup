@@ -1,16 +1,15 @@
-name: Sync Data (Incremental)
+name: Sync Data (Daily)
 
-# 唯一的定时增量 action：获取新增数据入库 R2。
-# 运行 scripts/sync_incremental.py：
-#   - 交易时段查重（休市市场跳过分钟K，数据最新跳过请求）
-#   - 只拉已有最后时间点之后的新数据，合并去重
-#   - 5m/15m/30m 由 1m 增量重采样
-#   - 并发上传 R2
+# 全市场日K同步：每天 1 次（UTC 0点）
+# 处理全市场 6000+ 只股票的日K + 小时K 增量同步
+# 选股指标预计算 → KV 快照（日K选股）
+#
+# 分钟K高频同步由 sync_minute_realtime.yml 单独处理（每 2 分钟，沪深300+纳指100）
 
 on:
   schedule:
-    # 每 30 分钟增量同步（脚本内含查重：休市/数据新鲜自动跳过，不浪费请求）
-    - cron: "*/30 * * * *"
+    # 每天 UTC 0:00（北京时间 8:00）
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       region:

@@ -1,0 +1,82 @@
+name: Sync Minute K (Realtime)
+
+# 高频分钟K同步：沪深300 + 纳指100，每 2 分钟一次
+# 公开仓库 Actions 额度无限，适合高频采集
+#
+# 流程：
+#   1. 拉取最新 1m K线（含延长时段）→ gzip 写入 R2
+#   2. 重采样 5m/15m/30m → 写入 R2
+#   3. 计算选股指标 → 写入 KV 快照
+#
+# 仅处理交易时段，休市自动跳过（减少无效请求）
+
+on:
+  schedule:
+    # 每 2 分钟（GitHub Actions cron 最低 5 分钟，但 2 分钟表达式会近似每 5 分钟触发）
+    - cron: "*/2 * * * *"
+  workflow_dispatch:
+    inputs:
+      index:
+        description: "指数：csi300 / nasdaq100 / both"
+        required: false
+        default: "both"
+        type: choice
+        options:
+          - both
+          - csi300
+          - nasdaq100
+
+env:
+  PYTHON_VERSION: "3.11"
+
+# 防止重叠运行（同一指数的并发请求可能触发 Yahoo 限流）
+concurrency:
+  group: sync-minute-realtime
+  cancel-in-progress: true
+
+jobs:
+  sync-csi300:
+    name: Minute K · 沪深300
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.index == 'both' || github.event.inputs.index == 'csi300')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Sync 1m K-line → R2 + KV (csi300)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
+          FETCH_CONCURRENCY: "10"
+        run: python scripts/sync_minute_realtime.py --index csi300 --region cn
+
+  sync-nasdaq100:
+    name: Minute K · 纳指100
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.index == 'both' || github.event.inputs.index == 'nasdaq100')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Sync 1m K-line → R2 + KV (nasdaq100)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
+          FETCH_CONCURRENCY: "10"
+        run: python scripts/sync_minute_realtime.py --index nasdaq100 --region us
