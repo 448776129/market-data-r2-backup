@@ -25,7 +25,7 @@ const REPO_NAME = "market-data-r2";
 const REPO_BRANCH = "main";
 
 // 对外接口域名（自定义域）
-const API_BASE = "https://stockapi.365200.xyz";
+const API_BASE = "https://stocks-api2.365200.xyz";
 
 // Yahoo chart API 反代入口（与采集端 config.YAHOO_CHART_PROXY 一致）
 // 国内访问 Yahoo 需经反代转发；用于 /price 实时行情。
