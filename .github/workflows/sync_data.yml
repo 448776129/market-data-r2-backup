@@ -41,7 +41,7 @@ on:
           - cn_etf
 
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
 
 # 防止定时与手动触发重叠运行（避免对 R2 同一批 key 并发写）
 concurrency:
@@ -168,5 +168,6 @@ jobs:
           curl -s -X POST "$WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d '{"text":"⚠️ 股票数据增量同步失败\n仓库: '"${{ github.repository }}"'\n运行: '"${{ github.server_url }}"'/'"${{ github.repository }}"'/actions/runs/'"${{ github.run_id }}"'\n触发: '"${{ github.event_name }}"'"}'
+
 
 

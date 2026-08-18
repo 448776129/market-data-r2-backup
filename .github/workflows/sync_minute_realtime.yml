@@ -27,7 +27,7 @@ on:
           - nasdaq100
 
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
 
 # 防止重叠运行（同一指数的并发请求可能触发 Yahoo 限流）
 concurrency:
@@ -80,3 +80,4 @@ jobs:
           KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
           FETCH_CONCURRENCY: "10"
         run: python scripts/sync_minute_realtime.py --index nasdaq100 --region us
+

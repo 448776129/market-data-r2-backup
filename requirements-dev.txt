@@ -1,4 +1,0 @@
-# 开发依赖（本地验证用，GitHub Actions 不需要）
-# 指标交叉验证：python scripts/test_indicators.py
--r requirements.txt
-pandas_ta>=0.4.71b0

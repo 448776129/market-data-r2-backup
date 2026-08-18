@@ -26,7 +26,7 @@ on:
           - cn_etf
 
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
 
 # 防止重复手动触发并行运行（meta 写同一批 key）
 concurrency:
@@ -140,3 +140,4 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           FETCH_CONCURRENCY: "10"
         run: python scripts/fetch_meta.py --region cn_etf
+

@@ -23,7 +23,7 @@ on:
           - cn_etf
 
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
 
 # 防止重复手动触发并行运行（全量入库写同一批 key）
 concurrency:
@@ -200,3 +200,4 @@ jobs:
           curl -s -X POST "$WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d '{"text":"⚠️ 股票数据全量入库失败\n仓库: '"${{ github.repository }}"'\n运行: '"${{ github.server_url }}"'/'"${{ github.repository }}"'/actions/runs/'"${{ github.run_id }}"'\n触发: '"${{ github.event_name }}"'"}'
+
