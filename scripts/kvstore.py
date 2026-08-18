@@ -59,7 +59,7 @@ def put(key: str, value: str) -> bool:
     if not (_env("CLOUDFLARE_API_TOKEN") and _env("CLOUDFLARE_ACCOUNT_ID") and _env("KV_NAMESPACE_ID")):
         return False
 
-    url = f"{_api_base()}/{_namespace_id()}/values/{key}"
+    url = f"{_api_base()}/{_namespace_id()}/values/{urllib.parse.quote(key, safe='')}"
     req = urllib.request.Request(
         url,
         data=value.encode("utf-8"),
@@ -85,7 +85,7 @@ def get(key: str) -> str | None:
     """读取一个 KV 键值。返回文本字符串，不存在或失败返回 None。"""
     if not (_env("CLOUDFLARE_API_TOKEN") and _env("CLOUDFLARE_ACCOUNT_ID") and _env("KV_NAMESPACE_ID")):
         return None
-    url = f"{_api_base()}/{_namespace_id()}/values/{key}"
+    url = f"{_api_base()}/{_namespace_id()}/values/{urllib.parse.quote(key, safe='')}"
     req = urllib.request.Request(
         url,
         method="GET",

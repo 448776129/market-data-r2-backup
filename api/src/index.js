@@ -1003,21 +1003,23 @@ async function handleScreener(params, env) {
   }
 
   const kvKey = `screener:${scope}`;
+  // 兼容旧版 scope 命名：daily → 1d
+  const normalizedKey = kvKey.replace(":daily:", ":1d:");
   let snapshotText;
   try {
-    snapshotText = await env.STATIC_KV.get(kvKey);
+    snapshotText = await env.STATIC_KV.get(normalizedKey);
   } catch (e) {
     return error(`KV 读取失败: ${e.message}`, 502);
   }
   if (!snapshotText) {
-    return error(`无选股快照: ${kvKey}。请先运行 screener_precompute.py`, 404);
+    return error(`无选股快照: ${normalizedKey}。请先运行 screener_precompute.py`, 404);
   }
 
   let snapshot;
   try {
     snapshot = JSON.parse(snapshotText);
   } catch {
-    return error(`快照 JSON 解析失败: ${kvKey}`, 502);
+    return error(`快照 JSON 解析失败: ${normalizedKey}`, 502);
   }
 
   const symbols = Object.keys(snapshot);
