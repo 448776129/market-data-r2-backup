@@ -81,6 +81,27 @@ def put(key: str, value: str) -> bool:
         return False
 
 
+def get(key: str) -> str | None:
+    """读取一个 KV 键值。返回文本字符串，不存在或失败返回 None。"""
+    if not (_env("CLOUDFLARE_API_TOKEN") and _env("CLOUDFLARE_ACCOUNT_ID") and _env("KV_NAMESPACE_ID")):
+        return None
+    url = f"{_api_base()}/{_namespace_id()}/values/{key}"
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"Authorization": f"Bearer {_token()}", "User-Agent": "Mozilla/5.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        return None
+    except Exception:
+        return None
+
+
 def put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> bool:
     """写入一个 KV 键值，字节形式（支持 JSON/任意二进制）。"""
     if not (_env("CLOUDFLARE_API_TOKEN") and _env("CLOUDFLARE_ACCOUNT_ID") and _env("KV_NAMESPACE_ID")):

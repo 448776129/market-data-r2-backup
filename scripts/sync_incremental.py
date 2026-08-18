@@ -40,6 +40,11 @@ import r2store  # noqa: E402
 import state  # noqa: E402
 import yahoo_chart  # noqa: E402
 
+# 内联指标计算（采集后直接算指标，不跑独立 precompute）
+import indicators as _ind  # noqa: E402
+import kvstore as _kv  # noqa: E402
+import json as _json  # noqa: E402
+
 COLS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
 DATE_COL = "Date"
 DT_COL = "Datetime"
@@ -169,11 +174,11 @@ def _fmt(ts: pd.Timestamp, interval: str) -> str:
 
 def fetch_incremental(
     region: str, symbol: str, interval: str, prev_ts: pd.Timestamp | None
-) -> tuple[int, pd.Timestamp | None]:
+) -> tuple[int, pd.Timestamp | None, pd.DataFrame | None]:
     """拉取单只股票指定周期增量并合并上传。
 
-    用状态清单里的最后时间 prev_ts 判增，命中跳过时完全不读 R2；
-    只有确认有新数据、需要合并时才读一次 R2 旧文件。返回 (新增行数, 合并后最后时间)。
+    返回 (新增行数, 合并后最后时间, 合并后的完整 DataFrame)。
+    无新增时 merged=None，避免不必要的后续计算。
     """
     now_local = marketlib.region_now(region)
     now_utc = utc_now()
@@ -209,11 +214,11 @@ def fetch_incremental(
         )
 
     if fresh is None or fresh.empty:
-        return 0, None
+        return 0, None, None
     added, merged = merge_and_upload(region, symbol, interval, fresh, known_last_ts=prev_ts)
     if merged is None or merged.empty:
-        return added, None
-    return added, merged.index.max()
+        return added, None, None
+    return added, merged.index.max(), merged
 
 
 def period_for(interval: str) -> str:
@@ -235,7 +240,7 @@ def sync_minute_and_derived(
     added = 0
     for interval in SOURCE_INTERVALS:
         prev = _ts(entry.get(interval))
-        added_i, last_ts = fetch_incremental(region, symbol, interval, prev)
+        added_i, last_ts, _ = fetch_incremental(region, symbol, interval, prev)
         if last_ts is not None:
             entry[interval] = _fmt(last_ts, interval)
         added += added_i
@@ -285,26 +290,110 @@ def sync_minute_and_derived(
     return added
 
 
+def _compute_snapshot(symbol: str, df: pd.DataFrame, interval: str) -> dict | None:
+    """从 K 线 DataFrame 计算最新指标快照（单只股票）。
+
+    返回指标 dict，数据不足时返回 None。
+    """
+    if df is None or len(df) < 5:
+        return None
+    try:
+        result = _ind.compute_all(df)
+    except Exception:
+        return None
+
+    n = len(df) - 1
+    close = float(df["Close"].iloc[n]) if "Close" in df else None
+    if close is None:
+        return None
+
+    def last(arr):
+        for i in range(len(arr) - 1, -1, -1):
+            v = arr[i]
+            if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                return float(v)
+        return None
+
+    snap = {
+        "close": close,
+        "change_1d": last(result["change_1d"]),
+        "change_5d": last(result["change_5d"]),
+        "ma5": last(result["ma5"]),
+        "ma10": last(result["ma10"]),
+        "ma20": last(result["ma20"]),
+        "ma60": last(result["ma60"]),
+        "ema12": last(result["ema12"]),
+        "ema26": last(result["ema26"]),
+        "macd": last(result["macd"]["macd"]),
+        "macd_signal": last(result["macd"]["signal"]),
+        "macd_histogram": last(result["macd"]["histogram"]),
+        "rsi14": last(result["rsi14"]),
+        "kdj_k": last(result["kdj"]["k"]),
+        "kdj_d": last(result["kdj"]["d"]),
+        "kdj_j": last(result["kdj"]["j"]),
+        "bb_upper": last(result["bollinger"]["upper"]),
+        "bb_middle": last(result["bollinger"]["middle"]),
+        "bb_lower": last(result["bollinger"]["lower"]),
+        "volume": float(df["Volume"].iloc[n]) if "Volume" in df else 0,
+        "volume_ma5": last(result["volume_ma5"]),
+        "volume_ma20": last(result["volume_ma20"]),
+    }
+    # 过滤掉核心字段为 None 的
+    if snap["ma5"] is None or snap["rsi14"] is None:
+        return None
+    # 清理 NaN → null
+    for k, v in list(snap.items()):
+        if v is not None and isinstance(v, float) and pd.isna(v):
+            snap[k] = None
+    return snap
+
+
+def _write_kv_snapshot(region: str, snapshots: dict[str, dict]) -> None:
+    """将一批股票的指标快照写入 KV。
+
+    读取已有 KV 快照 → 合并新数据 → 写回。
+    """
+    if not snapshots:
+        return
+    kv_key = f"screener:daily:{region}"
+    try:
+        # 读已有快照
+        existing = _kv.get(kv_key)
+        data = _json.loads(existing) if existing else {}
+    except Exception:
+        data = {}
+    # 合并新数据
+    data.update(snapshots)
+    try:
+        _kv.put(kv_key, _json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+    except Exception as exc:
+        print(f"  [KV] 写入失败 {kv_key}: {exc}", flush=True)
+
+
 def _process_one(
     reg: str, symbol: str, do_minute: bool, prev_entry: dict | None
-) -> tuple[str, int, str, dict]:
+) -> tuple[str, int, str, dict, dict | None]:
     """并发处理单只股票。
 
-    返回 (symbol, added, err_msg, new_entry)。
-    err_msg 空表示成功；new_entry 为更新后的状态清单条目（失败时为不变）。
+    返回 (symbol, added, err_msg, new_entry, indicator_snapshot)。
+    indicator_snapshot 为计算出的指标快照，无新增或无数据时=None。
     """
     new_entry = dict(prev_entry) if prev_entry else {}
+    indicator_snap = None
     try:
         prev = _ts(new_entry.get("1d"))
-        added_d, last_ts = fetch_incremental(reg, symbol, "1d", prev)
+        added_d, last_ts, merged_d = fetch_incremental(reg, symbol, "1d", prev)
         if last_ts is not None:
             new_entry["1d"] = _fmt(last_ts, "1d")
+        # 日K有新增 → 算指标
+        if added_d > 0 and merged_d is not None:
+            indicator_snap = _compute_snapshot(symbol, merged_d, "1d")
         added_m = 0
         if do_minute:
             added_m = sync_minute_and_derived(reg, symbol, new_entry)
-        return symbol, added_d + added_m, "", new_entry
+        return symbol, added_d + added_m, "", new_entry, indicator_snap
     except Exception as exc:  # noqa: BLE001
-        return symbol, 0, str(exc), (dict(prev_entry) if prev_entry else {})
+        return symbol, 0, str(exc), (dict(prev_entry) if prev_entry else {}), None
 
 
 def run(region: str | None, batch: int = 0, batches: int = 1) -> int:
@@ -336,13 +425,15 @@ def run(region: str | None, batch: int = 0, batches: int = 1) -> int:
         do_minute = reg in active_regions
         done = 0
         reg_changed = 0
+        reg_snapshots: dict[str, dict] = {}  # 本批次新增的指标快照
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {
                 pool.submit(_process_one, reg, sym, do_minute, snap.get(sym)): sym
                 for sym in symbols
             }
             for fut in as_completed(futures):
-                sym, added, err, new_entry = fut.result()
+                result = fut.result()
+                sym, added, err, new_entry, indicator_snap = result
                 done += 1
                 if err:
                     failed.append(f"{reg}:{sym}")
@@ -352,11 +443,18 @@ def run(region: str | None, batch: int = 0, batches: int = 1) -> int:
                         snap[sym] = new_entry
                         reg_changed += 1
                         changed_symbols += 1
+                    # 有新增数据且有指标快照 → 累计写入 KV
+                    if indicator_snap is not None:
+                        reg_snapshots[sym] = indicator_snap
                 if done % 25 == 0 or done == len(symbols):
                     print(
                         f"  [{done}/{len(symbols)}] {reg} 已处理，累计新增 {total_added} 行，失败 {len(failed)}",
                         flush=True,
                     )
+        # 写入选股指标快照 → KV（只写有新增的股票，不重算全量）
+        if reg_snapshots:
+            _write_kv_snapshot(reg, reg_snapshots)
+            print(f"  [KV] {reg}: 更新 {len(reg_snapshots)} 只股票指标快照", flush=True)
         # 仅当本轮有状态变化才写回清单，其余大部分股票不触碰 R2
         if reg_changed > 0:
             state.write("kline", reg, batch, snap)
