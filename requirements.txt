@@ -1,6 +1,6 @@
 # 采集运行时依赖（GitHub Actions / 生产环境）
 yfinance==0.2.44
-pandas==2.2.3
+pandas
 boto3==1.43.72
 
 # 一次性运行 scripts/build_universe.py 转换本地持仓文件所需（GitHub Actions 不需要）
