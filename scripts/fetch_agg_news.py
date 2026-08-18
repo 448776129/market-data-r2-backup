@@ -25,6 +25,13 @@ import r2store
 import kvstore  # 采集侧双写到 KV：读更省 Worker 配额，KV 读免费 + 低延迟
 
 PROXY = "https://img2.365200.xyz"
+
+
+def _news_url(raw_url: str) -> str:
+    """直连优先，YAHOO_USE_PROXY=1 时经反代（国内环境）。"""
+    if os.environ.get("YAHOO_USE_PROXY") == "1":
+        return f"{PROXY}/{raw_url}"
+    return raw_url
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -39,7 +46,7 @@ def _now_iso() -> str:
 # Yahoo HK latest-news
 # ============================================================
 def fetch_yahoo_hk() -> dict:
-    url = f"{PROXY}/https://hk.finance.yahoo.com/topic/latest-news/"
+    url = _news_url("https://hk.finance.yahoo.com/topic/latest-news/")
     req = urllib.request.Request(url, headers={**HEADERS, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"})
     with urllib.request.urlopen(req, timeout=45) as resp:
         body = resp.read().decode("utf-8", errors="replace")
@@ -246,9 +253,8 @@ def _extract_time_near_url(body: str, url: str, rel_time: str | None, today: dat
 # 东方财富 7x24h 快讯
 # ============================================================
 def fetch_eastmoney(page_size: int = 80) -> dict:
-    url = (
-        f"{PROXY}/https://newsapi.eastmoney.com/kuaixun/v1/"
-        f"getlist_102_ajaxResult_{page_size}_1_.html"
+    url = _news_url(
+        f"https://newsapi.eastmoney.com/kuaixun/v1/getlist_102_ajaxResult_{page_size}_1_.html"
     )
     req = urllib.request.Request(url, headers={
         **HEADERS,

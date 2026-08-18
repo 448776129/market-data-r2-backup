@@ -1,0 +1,4 @@
+# 服务器采集依赖（比 requirements.txt 精简）
+# r2s3/kvstore/sync_minute_realtime_pure 均为纯标准库（零依赖）
+# 仅同步增量脚本 sync_incremental.py / fetch_history.py 需要 pandas
+pandas>=2.2

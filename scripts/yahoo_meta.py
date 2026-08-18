@@ -20,6 +20,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+import os  # noqa: E402
+
 import config  # noqa: E402
 
 _ORIGIN = "https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -32,7 +34,8 @@ def fetch_meta(symbol: str, retries: int | None = None, delay: float | None = No
     返回字典（供 JSON 存储），失败重试后仍失败抛出异常。
     """
     raw_url = _ORIGIN + urllib.parse.quote(symbol) + "?interval=1d&range=5d"
-    url = f"{_PROXY_BASE.rstrip('/')}/{raw_url}"
+    # 直连优先（服务器/GitHub Actions 海外）；国内可设 YAHOO_USE_PROXY=1 走反代
+    url = (f"{_PROXY_BASE.rstrip('/')}/{raw_url}" if os.environ.get("YAHOO_USE_PROXY") == "1" else raw_url)
     retries = config.MAX_RETRIES if retries is None else retries
     delay = config.REQUEST_DELAY if delay is None else delay
 

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -28,15 +29,18 @@ import pandas as pd
 import config  # noqa: E402
 
 # Yahoo chart API 官方端点（经反代访问）
-# 反代格式：{PROXY_BASE}/{原始URL}
+# 直连优先：服务器/GitHub Actions 海外环境直连 Yahoo 稳定无 403。
+# 国内环境可设 YAHOO_USE_PROXY=1 走反代（img2.365200.xyz）访问。
 _ORIGIN = "https://query1.finance.yahoo.com/v8/finance/chart/"
 _PROXY_BASE = config.YAHOO_CHART_PROXY  # 如 https://img2.365200.xyz
 
 
 def _build_url(symbol: str, interval: str, params: dict[str, Any]) -> str:
-    """构造反代后的完整 URL。"""
+    """构造请求 URL：默认直连 Yahoo，YAHOO_USE_PROXY=1 时经反代。"""
     raw = _ORIGIN + urllib.parse.quote(symbol) + "?" + urllib.parse.urlencode(params)
-    return f"{_PROXY_BASE.rstrip('/')}/{raw}"
+    if os.environ.get("YAHOO_USE_PROXY") == "1":
+        return f"{_PROXY_BASE.rstrip('/')}/{raw}"
+    return raw
 
 
 def _request(url: str, timeout: int = 30) -> dict:
