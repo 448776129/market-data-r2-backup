@@ -150,8 +150,8 @@ def main():
 
     print(f"\n=== {args.index} 完成: ok={ok} skip={skip} err={err} rows={total_rows} ===")
 
-    # 选股指标预计算 → KV（只算这批股票）
-    if ok > 0:
+    # 选股指标预计算 → KV（只要有股票列表就写，不依赖本次同步结果）
+    if symbols:
         print("\n--- 选股指标预计算 → KV ---")
         try:
             import indicators as ind  # noqa: E402
