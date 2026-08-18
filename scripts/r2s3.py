@@ -182,3 +182,88 @@ def head_obj(key: str) -> dict | None:
 
 def exists(key: str) -> bool:
     return head_obj(key) is not None
+
+
+def list_keys(prefix: str = "", max_keys: int = 1000, max_results: int | None = None) -> list[str]:
+    """列出 bucket 内对象 key（分页拉取）。
+
+    返回所有匹配 key 的列表（按字典序）。max_results 限制总数。
+    """
+    import json as _json
+    import urllib.parse
+
+    all_keys: list[str] = []
+    token: str | None = None
+    while True:
+        query = f"?list-type=2&max-keys={max_keys}"
+        if prefix:
+            query += f"&prefix={urllib.parse.quote(prefix, safe='')}"
+        if token:
+            query += f"&continuation-token={urllib.parse.quote(token, safe='')}"
+
+        url = f"{_endpoint()}/{_bucket()}{query}"
+        # 对 query 请求需要单独签名（canonical query 非空）
+        req = urllib.request.Request(url, method="GET", headers=_sigv4_get_headers("GET", query))
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                body = _json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return all_keys
+            raise
+
+        for obj in body.get("Contents", []) or []:
+            all_keys.append(obj["Key"])
+        if max_results and len(all_keys) >= max_results:
+            return all_keys[:max_results]
+        if not body.get("IsTruncated"):
+            break
+        token = body.get("NextContinuationToken")
+        if not token:
+            break
+    return all_keys
+
+
+def _sigv4_get_headers(method: str, query: str) -> dict:
+    """为带 query 的请求生成签名头（不含 body）。"""
+    import hashlib
+    from datetime import datetime, timezone
+
+    access_key = _env("R2_ACCESS_KEY_ID")
+    secret = _env("R2_SECRET_ACCESS_KEY")
+    now = datetime.now(timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(b"").hexdigest()
+
+    host = _endpoint().split("//")[1]
+    headers_to_sign = {
+        "host": host,
+        "x-amz-content-sha256": payload_hash,
+        "x-amz-date": amz_date,
+    }
+    signed_list = sorted(headers_to_sign.keys())
+    canonical_headers = "".join(f"{k}:{headers_to_sign[k]}\n" for k in signed_list)
+    signed_headers = ";".join(signed_list)
+
+    canonical_request = "\n".join([
+        method, f"/{_bucket()}", query.lstrip("?"), canonical_headers,
+        signed_headers, payload_hash,
+    ])
+    credential_scope = f"{date_stamp}/{_REGION}/{_SERVICE}/aws4_request"
+    string_to_sign = "\n".join([
+        "AWS4-HMAC-SHA256", amz_date, credential_scope,
+        hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+    ])
+    k_date = _sign(("AWS4" + secret).encode("utf-8"), date_stamp.encode("utf-8"))
+    k_region = _sign(k_date, _REGION.encode("utf-8"))
+    k_service = _sign(k_region, _SERVICE.encode("utf-8"))
+    k_signing = _sign(k_service, b"aws4_request")
+    signature = hmac.new(k_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    return {
+        "Authorization": (f"AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, "
+                          f"SignedHeaders={signed_headers}, Signature={signature}"),
+        "x-amz-content-sha256": payload_hash,
+        "x-amz-date": amz_date,
+    }
