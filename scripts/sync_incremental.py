@@ -53,6 +53,8 @@ SOURCE_INTERVALS = ["1m", "1h"]
 # 各周期 R2 key 前缀
 SUBDIR = {
     "1d": config.KLINE_SUBDIR,
+    "1wk": config.KLINE_WEEKLY_SUBDIR,
+    "1mo": config.KLINE_MONTHLY_SUBDIR,
     "1m": config.INTRADAY_M1_SUBDIR,
     "5m": config.INTRADAY_M5_SUBDIR,
     "15m": config.INTRADAY_M15_SUBDIR,
@@ -93,7 +95,7 @@ def _normalize_df(df: pd.DataFrame, interval: str) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index)
     if getattr(df.index, "tz", None) is not None:
         df.index = df.index.tz_localize(None)
-    if interval == "1d":
+    if _is_daily_like(interval):
         df.index = df.index.normalize()
     return df
 
@@ -114,7 +116,7 @@ def merge_and_upload(
 
     返回 (新增行数, 合并后的完整 DataFrame)。
     """
-    index_col = DATE_COL if interval == "1d" else DT_COL
+    index_col = DATE_COL if _is_daily_like(interval) else DT_COL
     fresh = _normalize_df(fresh, interval)
 
     # ---- 快速路径：已知最后时间，且 fresh 完全在其之后 → 不必读 R2 ----
@@ -164,11 +166,16 @@ def _ts(entry_value: str | None) -> pd.Timestamp | None:
         return None
 
 
+def _is_daily_like(interval: str) -> bool:
+    """日K/周K/月K：日期型（非日内分钟/小时K）。"""
+    return interval in ("1d", "1wk", "1mo")
+
+
 def _fmt(ts: pd.Timestamp, interval: str) -> str:
-    """把 Timestamp 转成状态清单里的字符串（1d 只留日期，其余留完整时间）。"""
+    """把 Timestamp 转成状态清单里的字符串（日期型只留日期，其余留完整时间）。"""
     if ts is None:
         return ""
-    ts = ts.normalize() if interval == "1d" else ts
+    ts = ts.normalize() if _is_daily_like(interval) else ts
     return ts.isoformat()
 
 
@@ -185,14 +192,14 @@ def fetch_incremental(
 
     # ---- 增量判重：直接用状态清单的最后时间，避免读 R2 全文件 ----
     if prev_ts is not None:
-        if interval == "1d":
+        if _is_daily_like(interval):
             in_session = marketlib.is_market_session(region, now_local)
             recent_cutoff = now_local.date() - timedelta(days=2)
-            if not in_session and prev_ts.date() >= recent_cutoff:
-                return 0, None
+            if interval == "1d" and not in_session and prev_ts.date() >= recent_cutoff:
+                return 0, None, None
             start = (prev_ts - pd.Timedelta(days=DAILY_BUFFER_DAYS)).date()
             fresh = yahoo_chart.fetch_kline(
-                symbol, interval="1d", start=start, prepost=False
+                symbol, interval=interval, start=start, prepost=False
             )
         else:
             if not marketlib.is_market_session(region, now_local):
@@ -210,7 +217,7 @@ def fetch_incremental(
             symbol,
             interval=interval,
             period=period_for(interval),
-            prepost=(interval != "1d"),
+            prepost=(not _is_daily_like(interval)),
         )
 
     if fresh is None or fresh.empty:
@@ -223,8 +230,8 @@ def fetch_incremental(
 
 def period_for(interval: str) -> str:
     """该周期首次全量拉取的 period。"""
-    if interval == "1d":
-        return config.HISTORY_PERIOD
+    if _is_daily_like(interval):
+        return config.HISTORY_PERIOD  # "5y"（日K/周K/月K都拉5年）
     return config.INTRADAY_PERIOD[interval]
 
 
@@ -388,6 +395,13 @@ def _process_one(
         # 日K有新增 → 算指标
         if added_d > 0 and merged_d is not None:
             indicator_snap = _compute_snapshot(symbol, merged_d, "1d")
+        # 周K/月K：跟随日K同步（每天4次，Yahoo原生返回完整历史）
+        for wk_interval in ("1wk", "1mo"):
+            prev_wk = _ts(new_entry.get(wk_interval))
+            added_wk, last_wk, _ = fetch_incremental(reg, symbol, wk_interval, prev_wk)
+            if last_wk is not None:
+                new_entry[wk_interval] = _fmt(last_wk, wk_interval)
+            added_d += added_wk
         added_m = 0
         if do_minute:
             added_m = sync_minute_and_derived(reg, symbol, new_entry)

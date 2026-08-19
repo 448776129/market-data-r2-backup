@@ -41,6 +41,9 @@ INTERVAL = "1d"
 DATA_DIR = "data"
 # K线数据子目录（每只股票一个文件）
 KLINE_SUBDIR = "kline"
+# 周K/月K（Yahoo chart API 原生支持，与日K类似）
+KLINE_WEEKLY_SUBDIR = "kline_1wk"
+KLINE_MONTHLY_SUBDIR = "kline_1mo"
 # 非K线数据（快照/财务/分析师等）子目录（每只股票一个文件）
 META_SUBDIR = "meta"
 # 全市场股票列表子目录；文件名 = {region}.csv（如 us.csv、cn.csv）

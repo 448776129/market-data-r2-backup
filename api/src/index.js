@@ -35,6 +35,8 @@ const YAHOO_CHART_ORIGIN = "https://query1.finance.yahoo.com/v8/finance/chart/";
 // interval -> data 子目录映射
 const INTERVAL_DIR = {
   "1d": "kline",
+  "1wk": "kline_1wk",
+  "1mo": "kline_1mo",
   "1m": "kline_1m",
   "5m": "kline_5m",
   "15m": "kline_15m",
@@ -335,7 +337,7 @@ async function handleKline(params, env) {
   }
 
   let rows = parseCSV(text);
-  const indexCol = interval === "1d" ? "Date" : "Datetime";
+  const indexCol = (interval === "1d" || interval === "1wk" || interval === "1mo") ? "Date" : "Datetime";
 
   if (startTs !== null || endTs !== null) {
     rows = rows.filter((r) => {
