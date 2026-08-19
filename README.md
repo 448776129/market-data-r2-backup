@@ -20,11 +20,11 @@
 
 ## 线上接口
 
-Worker 部署在 Cloudflare Workers，当前地址：
+Worker 部署在 Cloudflare Workers，可通过自定义域名访问：
 ```
-https://market-data-api.1278972617.workers.dev
+https://stocks-api2.365200.xyz
 ```
-自定义域名（如已绑定）：`https://stockapi.365200.xyz`
+备用地址：`https://stocks-api2.wangfugui.workers.dev`
 
 ### 接口一览
 
@@ -33,26 +33,30 @@ https://market-data-api.1278972617.workers.dev
 | `GET /` | 项目首页 + API 文档 | `/` |
 | `GET /kline` | K 线数据（日K/1m/5m/15m/30m/1h） | `/kline?symbol=AAPL&interval=1d&limit=5` |
 | `GET /price` | 实时价格（当场调取 Yahoo） | `/price?symbol=AAPL` |
-| `GET /download` | 下载 gzip 原始 CSV | `/download?symbol=AAPL&interval=1h` |
-| `GET /quote` | 个股元数据 | `/quote?symbol=0700.HK` |
+| `GET /screener` | 选股器（读 KV 快照过滤） | `/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30` |
 | `GET /news` | 聚合新闻（雅虎+东方财富） | `/news?limit=50` |
+| `GET /news-yh` | 雅虎香港头条（缓存） | `/news-yh?limit=20` |
+| `GET /news-em` | 东方财富 7x24h（缓存） | `/news-em?limit=80` |
+| `GET /news-yh/live` | 实时拉取雅虎香港头条 | `/news-yh/live?limit=20` |
+| `GET /news-em/live` | 实时拉取东方财富 7x24h | `/news-em/live?limit=80` |
+| `GET /quote` | 个股元数据 | `/quote?symbol=0700.HK` |
+| `GET /download` | 下载 gzip 原始 CSV | `/download?symbol=AAPL&interval=1h` |
 | `GET /universe` | 指数成分股清单 | `/universe?index=csi300` |
 | `GET /indices` | 全部可用指数 | `/indices` |
 | `GET /symbols` | 按区域列出股票代码 | `/symbols?region=us&limit=5` |
-| `GET /screener` | 选股器（读 KV 快照过滤） | `/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30` |
 | `GET /status` | 服务配置信息 | `/status` |
 
 ### 选股器用法
 
 ```bash
 # 查看选股器参数说明
-curl "https://market-data-api.1278972617.workers.dev/screener"
+curl "https://stocks-api2.365200.xyz/screener"
 
 # 日K选股：MA5>MA10（多头）且 RSI14<30（超卖）
-curl "https://market-data-api.1278972617.workers.dev/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30&sort=change_1d&limit=20"
+curl "https://stocks-api2.365200.xyz/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30&sort=change_1d&limit=20"
 
 # 数值条件过滤
-curl "https://market-data-api.1278972617.workers.dev/screener?scope=daily:us&ma5_gt=300&change_1d_gt=2"
+curl "https://stocks-api2.365200.xyz/screener?scope=daily:us&ma5_gt=300&change_1d_gt=2"
 ```
 
 选股器支持的过滤条件：

@@ -1335,6 +1335,7 @@ const HOME_HTML = `<!DOCTYPE html>
   <div class="ep-grid">
     <div class="ep"><div class="m">GET /kline</div><div class="d">K线数据（日K / 1m / 5m / 15m / 30m / 1h）</div><div class="ex">/kline?symbol=AAPL&amp;interval=1d&amp;limit=5</div></div>
     <div class="ep"><div class="m">GET /price</div><div class="d">实时价格（当场调取 Yahoo API，含涨跌幅/52周高低，非数据库缓存）</div><div class="ex">/price?symbol=AAPL</div></div>
+    <div class="ep"><div class="m">GET /screener</div><div class="d">选股器：从 KV 快照中按技术指标条件过滤股票（MA/MACD/RSI/KDJ/布林带等），毫秒级返回</div><div class="ex">/screener?scope=daily:us&amp;ma5_gt_ma10=true&amp;rsi14_lt=30</div></div>
     <div class="ep"><div class="m">GET /download</div><div class="d">下载 gzip 压缩的原始 CSV（体积小，可离线分析）</div><div class="ex">/download?symbol=AAPL&amp;interval=1h</div></div>
     <div class="ep"><div class="m">GET /quote</div><div class="d">个股元数据（名称/行业/市值/最新价/52周高低…）</div><div class="ex">/quote?symbol=600519.SS</div></div>
     <div class="ep"><div class="m">GET /news</div><div class="d">聚合新闻（雅虎 + 东方财富扁平合并），按发布时间倒序，默认 20 条，加 limit 获取更多</div><div class="ex">/news?limit=50</div></div>
