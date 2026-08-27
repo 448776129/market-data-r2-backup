@@ -110,13 +110,15 @@ INTRADAY_M30_SUBDIR = "kline_30m"
 INTRADAY_M1H_SUBDIR = "kline_1h"
 # 分钟级K线各周期的 yfinance period（1m 仅保留约5~7天，1h 约730天）
 INTRADAY_PERIOD = {"1m": "5d", "1h": "6mo"}
-# 由 1m 重采样计算得到的周期：5m/15m/30m（雅虎不提供这些历史周期，代码计算）。
-# 1h 由雅虎原生提供（含 15:30~16:00 收盘bar），不在此派生。
+# 由 1m 重采样计算得到的周期：5m/15m/30m/1h（雅虎不提供这些历史周期，代码计算）。
+# 1h 也改为由 1m 重采样派生：Volume 为 1m 真实求和、时间戳整点、含盘前盘后。
+# 历史 1h（>1m覆盖范围）由 fetch_history 原生拉取保留，二者合并去重共存。
 # 映射：衍生周期 -> pandas 重采样规则
 INTRADAY_DERIVED = {
     "5m": "5min",
     "15m": "15min",
     "30m": "30min",
+    "1h": "60min",
 }
 # 分钟级K线增量拉取时的回看缓冲天数：覆盖数据修订（除权/分红/错误修正）
 INTRADAY_BUFFER_DAYS = 2

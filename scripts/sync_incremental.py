@@ -308,9 +308,11 @@ def sync_minute_and_derived(
         agg["Adj Close"] = m1["Close"].resample(rule).last()
         agg = agg[COLS]
         agg.index = pd.to_datetime(agg.index)
-        # 派生周期的快速路径：完全在已知最后时间之后 → 不必读 R2
+        # 派生周期的快速路径：完全在已知最后时间之后 → 不必读 R2。
+        # 注意：1h 不适用（1h 有 6 个月历史由 fetch_history 原生拉取，1m 仅 5 天，
+        # 快速路径会覆盖丢历史）→ 1h 永远走常规合并路径。
         known_last = _ts(entry.get(target))
-        if known_last is not None and agg.index.min() > known_last:
+        if target != "1h" and known_last is not None and agg.index.min() > known_last:
             csv_text = agg.to_csv()
             r2store.put_csv(key_for(region, symbol, target), csv_text)
             added += len(agg)
@@ -439,16 +441,7 @@ def _process_one(
                 new_entry[wk_interval] = _fmt(last_wk, wk_interval)
             added_d += added_wk
         added_m = 0
-        # 1h：任何时段都同步（不依赖交易时段）；失败不影响其他周期
-        try:
-            prev_1h = _ts(new_entry.get("1h"))
-            added_1h, last_1h, _ = fetch_incremental(reg, symbol, "1h", prev_1h)
-            if last_1h is not None:
-                new_entry["1h"] = _fmt(last_1h, "1h")
-            added_d += added_1h
-        except Exception as exc_1h:
-            print(f"  [WARN] {symbol} 1h同步失败(不影响其他): {exc_1h}", flush=True)
-        # 1m/5m/15m/30m：仅交易时段
+        # 5m/15m/30m/1h：由 1m 重采样派生（含盘前盘后、Volume 真实）；仅交易时段
         if do_minute:
             added_m = sync_minute_and_derived(reg, symbol, new_entry)
         return symbol, added_d + added_m, "", new_entry, indicator_snap

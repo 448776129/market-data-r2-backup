@@ -68,7 +68,7 @@ SUBDIR = {
     "30m": config.INTRADAY_M30_SUBDIR,
 }
 # 重采样：分钟数
-RESAMPLE_MIN = {"5m": 5, "15m": 15, "30m": 30}
+RESAMPLE_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60}
 FETCH_CONCURRENCY = int(os.environ.get("FETCH_CONCURRENCY", "10"))
 NAN = float("nan")
 
@@ -163,6 +163,31 @@ def load_csv_gz(region: str, symbol: str, interval: str) -> list[list] | None:
     if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
     return csv_to_rows(raw.decode("utf-8", errors="replace"))
+
+
+def _merge_derived(region: str, symbol: str, interval: str, new_rows: list[list]) -> None:
+    """合并派生K线：读 R2 已有 → 按时间戳去重合并 → 写回。
+
+    避免高频覆盖写丢历史（如 1h 有 6 个月历史，而 1m 仅 5 天）。
+    new_rows 含表头。
+    """
+    existing = load_csv_gz(region, symbol, interval)
+    if not existing or len(existing) < 2:
+        put_csv_gz(region, symbol, interval, new_rows)
+        return
+
+    # existing/new 都含表头；合并去重（保留 new 覆盖 existing 同时间戳）
+    merged_header = existing[0]
+    merged: dict[str, list] = {}
+    for row in existing[1:]:
+        if row:
+            merged[row[0]] = row
+    for row in new_rows[1:]:
+        if row:
+            merged[row[0]] = row
+
+    out = [merged_header] + [merged[k] for k in sorted(merged.keys())]
+    put_csv_gz(region, symbol, interval, out)
 
 
 # ── 指标快照（indicators_pure）─────────────────────────────────
@@ -357,7 +382,7 @@ def sync_one(region: str, symbol: str) -> dict:
             ])
         put_csv_gz(region, symbol, "1m", csv_rows)
 
-        # 重采样 5m/15m/30m
+        # 重采样 5m/15m/30m/1h（合并已有派生数据，避免覆盖丢历史）
         for derived, minutes in RESAMPLE_MIN.items():
             agg = resample_1m(rows, minutes)
             if not agg:
@@ -369,7 +394,7 @@ def sync_one(region: str, symbol: str) -> dict:
                     _fmt(r["open"]), _fmt(r["high"]), _fmt(r["low"]), _fmt(r["close"]),
                     _fmt(r["adjclose"]), _fmt(r["volume"]),
                 ])
-            put_csv_gz(region, symbol, derived, d_rows)
+            _merge_derived(region, symbol, derived, d_rows)
 
         result["rows"] = len(rows)
         result["status"] = "ok"
