@@ -425,15 +425,19 @@ def _process_one(
                 new_entry[wk_interval] = _fmt(last_wk, wk_interval)
             added_d += added_wk
         added_m = 0
-        # 1h：任何时段都同步（不依赖交易时段）
-        prev_1h = _ts(new_entry.get("1h"))
-        added_1h, last_1h, _ = fetch_incremental(reg, symbol, "1h", prev_1h)
-        if last_1h is not None:
-            new_entry["1h"] = _fmt(last_1h, "1h")
+        # 1h：任何时段都同步（不依赖交易时段）；失败不影响其他周期
+        try:
+            prev_1h = _ts(new_entry.get("1h"))
+            added_1h, last_1h, _ = fetch_incremental(reg, symbol, "1h", prev_1h)
+            if last_1h is not None:
+                new_entry["1h"] = _fmt(last_1h, "1h")
+            added_d += added_1h
+        except Exception as exc_1h:
+            print(f"  [WARN] {symbol} 1h同步失败(不影响其他): {exc_1h}", flush=True)
         # 1m/5m/15m/30m：仅交易时段
         if do_minute:
             added_m = sync_minute_and_derived(reg, symbol, new_entry)
-        return symbol, added_d + added_1h + added_m, "", new_entry, indicator_snap
+        return symbol, added_d + added_m, "", new_entry, indicator_snap
     except Exception as exc:  # noqa: BLE001
         return symbol, 0, str(exc), (dict(prev_entry) if prev_entry else {}), None
 

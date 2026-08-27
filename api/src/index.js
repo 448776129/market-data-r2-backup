@@ -27,8 +27,8 @@ const REPO_BRANCH = "main";
 // 对外接口域名（自定义域）
 const API_BASE = "https://stocks-api2.365200.xyz";
 
-// Yahoo chart API 反代入口（与采集端 config.YAHOO_CHART_PROXY 一致）
-// 国内访问 Yahoo 需经反代转发；用于 /price 实时行情。
+// Yahoo chart API（直连，Workers 海外边缘无 403）。
+// 反代 img2.365200.xyz 仅在采集端国内环境使用；Workers /price 已改直连。
 const YAHOO_CHART_PROXY = "https://img2.365200.xyz";
 const YAHOO_CHART_ORIGIN = "https://query1.finance.yahoo.com/v8/finance/chart/";
 
@@ -453,7 +453,7 @@ async function handleQuote(params, env) {
 
 // ============================================================
 // 实时价格（当场调取 Yahoo API，实时返回最新价）
-// 逻辑：直接请求 Yahoo chart API（经反代）range=1d 数据，
+// 逻辑：直连 Yahoo chart API range=1d 数据（Workers 海外边缘直连无 403），
 // 从 meta 取实时价格 / 涨跌 / 当日高低 / 成交量 / 名称 / 币种。
 // 注意：不读 R2 数据库，保证价格是最新的（含盘前盘后）。
 // ============================================================
