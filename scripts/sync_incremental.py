@@ -203,10 +203,10 @@ def fetch_incremental(
             )
         else:
             if not marketlib.is_market_session(region, now_local):
-                return 0, None
+                return 0, None, None
             minutes_since = (now_utc - prev_ts).total_seconds() / 60
             if minutes_since < config.INCREMENTAL_MIN_INTERVAL_MINUTES:
-                return 0, None
+                return 0, None, None
             start = prev_ts - pd.Timedelta(days=config.INTRADAY_BUFFER_DAYS)
             fresh = yahoo_chart.fetch_kline(
                 symbol, interval=interval, start=start, prepost=True

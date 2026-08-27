@@ -458,9 +458,11 @@ async function handleQuote(params, env) {
 // 注意：不读 R2 数据库，保证价格是最新的（含盘前盘后）。
 // ============================================================
 async function fetchRealtimeQuote(symbol) {
-  // 经反代访问 Yahoo chart API（range=1d 足够拿 meta 实时价）
+  // 直连 Yahoo chart API（range=1d 足够拿 meta 实时价）。
+// Cloudflare Worker 跑在海外边缘节点，直连 Yahoo 无 403；
+// 之前走反代 img2.365200.xyz 会 530（源站错）。
   const query = `interval=1d&range=1d`;
-  const url = `${YAHOO_CHART_PROXY}/${YAHOO_CHART_ORIGIN}${encodeURIComponent(symbol)}?${query}`;
+  const url = `${YAHOO_CHART_ORIGIN}${encodeURIComponent(symbol)}?${query}`;
   const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`Yahoo chart API HTTP ${resp.status}`);
