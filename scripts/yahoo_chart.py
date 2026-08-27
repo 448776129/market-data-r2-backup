@@ -200,7 +200,7 @@ def _parse_chart_pure(data: dict, symbol: str, interval: str) -> list[dict]:
         close = closes[i] if i < len(closes) else None
         if close is None:
             continue
-        if interval == "1d":
+        if interval in ("1d", "1wk", "1mo"):
             dt_str = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
         else:
             dt_str = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -254,8 +254,8 @@ def _parse_chart(data: dict, symbol: str, interval: str) -> pd.DataFrame:
     df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce")
     # 去掉时区，与现有入库文件一致（本地文件为 naive）
     df.index = df.index.tz_localize(None)
-    if interval == "1d":
-        # 日K归一化到纯日期（去掉雅虎附带的盘中时间戳）
+    if interval in ("1d", "1wk", "1mo"):
+        # 日K/周K/月K归一化到纯日期（去掉雅虎附带的盘中时间戳）
         df.index = df.index.normalize()
         df.index.name = "Date"
     else:
