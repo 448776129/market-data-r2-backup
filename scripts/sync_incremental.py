@@ -76,11 +76,25 @@ def load_existing(region: str, symbol: str, interval: str, index_col: str) -> pd
 
     **只在绝对需要时调用**：每调用一次就是一次 R2 Class B 读。
     若调用方知道 fresh 的所有行都严格晚于已有数据，应直接走「直接覆盖写入」路径。
+
+    兼容旧数据：早期周K/月K用 Datetime 列，新代码用 Date；自动识别并统一。
     """
     text = r2store.get_csv_text(key_for(region, symbol, interval))
     if text is None:
         return None
-    df = pd.read_csv(io.StringIO(text), index_col=index_col, parse_dates=True)
+    # 先读全部列，再选择实际存在的日期列
+    df = pd.read_csv(io.StringIO(text))
+    present = list(df.columns)
+    date_col = None
+    for cand in (DATE_COL, DT_COL):
+        if cand in present:
+            date_col = cand
+            break
+    if date_col is None:
+        # 无日期列（异常数据），返回 None 让调用方自愈
+        return None
+    df = pd.read_csv(io.StringIO(text), index_col=date_col, parse_dates=True)
+    df.index.name = index_col  # 统一为调用方期望的列名（Date/Datetime）
     df.index = pd.to_datetime(df.index)
     if getattr(df.index, "tz", None) is not None:
         df.index = df.index.tz_localize(None)
