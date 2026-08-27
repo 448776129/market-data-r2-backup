@@ -49,7 +49,7 @@ COLS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
 DATE_COL = "Date"
 DT_COL = "Datetime"
 
-SOURCE_INTERVALS = ["1m", "1h"]
+SOURCE_INTERVALS = ["1m"]  # 1h 已在 _process_one 中单独同步（任何时段）
 # 各周期 R2 key 前缀
 SUBDIR = {
     "1d": config.KLINE_SUBDIR,
@@ -189,6 +189,28 @@ def fetch_incremental(
     """
     now_local = marketlib.region_now(region)
     now_utc = utc_now()
+
+    # 1h：不依赖交易时段（休市也会更新最后一根bar）；1m/派生周期依赖盘中
+    if interval == "1h":
+        if prev_ts is not None:
+            minutes_since = (now_utc - prev_ts).total_seconds() / 60
+            if minutes_since < config.INCREMENTAL_MIN_INTERVAL_MINUTES:
+                return 0, None, None
+            start = prev_ts - pd.Timedelta(days=config.INTRADAY_BUFFER_DAYS)
+            fresh = yahoo_chart.fetch_kline(
+                symbol, interval="1h", start=start, prepost=True
+            )
+        else:
+            # 无状态：首次全量拉取
+            fresh = yahoo_chart.fetch_kline(
+                symbol, interval="1h", period=config.INTRADAY_PERIOD["1h"], prepost=True
+            )
+        if fresh is None or fresh.empty:
+            return 0, None, None
+        added, merged = merge_and_upload(region, symbol, "1h", fresh, known_last_ts=prev_ts)
+        if merged is None or merged.empty:
+            return added, None, None
+        return added, merged.index.max(), merged
 
     # ---- 增量判重：直接用状态清单的最后时间，避免读 R2 全文件 ----
     if prev_ts is not None:
@@ -403,9 +425,15 @@ def _process_one(
                 new_entry[wk_interval] = _fmt(last_wk, wk_interval)
             added_d += added_wk
         added_m = 0
+        # 1h：任何时段都同步（不依赖交易时段）
+        prev_1h = _ts(new_entry.get("1h"))
+        added_1h, last_1h, _ = fetch_incremental(reg, symbol, "1h", prev_1h)
+        if last_1h is not None:
+            new_entry["1h"] = _fmt(last_1h, "1h")
+        # 1m/5m/15m/30m：仅交易时段
         if do_minute:
             added_m = sync_minute_and_derived(reg, symbol, new_entry)
-        return symbol, added_d + added_m, "", new_entry, indicator_snap
+        return symbol, added_d + added_1h + added_m, "", new_entry, indicator_snap
     except Exception as exc:  # noqa: BLE001
         return symbol, 0, str(exc), (dict(prev_entry) if prev_entry else {}), None
 
