@@ -244,6 +244,12 @@ def fetch_incremental(
             if minutes_since < config.INCREMENTAL_MIN_INTERVAL_MINUTES:
                 return 0, None, None
             start = prev_ts - pd.Timedelta(days=config.INTRADAY_BUFFER_DAYS)
+            # 限制 1m 增量跨度最多 5 天：Yahoo 1m 数据仅保留约 7 天，
+            # prev_ts 过旧（如跨周/停更多天）时 start 会超限导致 HTTP 422
+            if interval in ("1m",):
+                max_lookback = now_utc - pd.Timedelta(days=5)
+                if start < max_lookback:
+                    start = max_lookback
             fresh = yahoo_chart.fetch_kline(
                 symbol, interval=interval, start=start, prepost=True
             )
