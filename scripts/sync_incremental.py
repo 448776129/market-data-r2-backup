@@ -483,6 +483,8 @@ def run(region: str | None, batch: int = 0, batches: int = 1) -> int:
                 done += 1
                 if err:
                     failed.append(f"{reg}:{sym}")
+                    if len(failed) <= 5:  # 只打印前5个错误详情便于排查
+                        print(f"  [ERR] {sym}: {err}", flush=True)
                 else:
                     total_added += added
                     if new_entry and new_entry != snap.get(sym):
