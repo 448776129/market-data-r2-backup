@@ -200,6 +200,10 @@ def _parse_chart_pure(data: dict, symbol: str, interval: str) -> list[dict]:
         close = closes[i] if i < len(closes) else None
         if close is None:
             continue
+        # 过滤"当前实时 bar"（秒≠0）：Yahoo 会在最后附一根进行中的 bar，
+        # 时间戳非整点/整分、Volume=0，入库会导致时间戳不规整
+        if t % 60 != 0:
+            continue
         if interval in ("1d", "1wk", "1mo"):
             dt_str = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
         else:
@@ -236,6 +240,8 @@ def _parse_chart(data: dict, symbol: str, interval: str) -> pd.DataFrame:
     q = quote[0]
     rows = []
     for i, t in enumerate(ts):
+        if t % 60 != 0:
+            continue  # 过滤当前实时 bar（秒≠0，时间戳非规整、Volume=0）
         rows.append(
             {
                 "Open": q.get("open", [])[i],
@@ -247,7 +253,7 @@ def _parse_chart(data: dict, symbol: str, interval: str) -> pd.DataFrame:
             }
         )
 
-    df = pd.DataFrame(rows, index=pd.to_datetime(ts, unit="s", utc=True))
+    df = pd.DataFrame(rows, index=pd.to_datetime([t for t in ts if t % 60 == 0], unit="s", utc=True))
     # 转成与 yfinance 一致的列类型
     df = df.astype({"Open": "float64", "High": "float64", "Low": "float64", "Close": "float64"})
     df["Adj Close"] = pd.to_numeric(df["Adj Close"], errors="coerce")

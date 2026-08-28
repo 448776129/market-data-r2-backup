@@ -1,0 +1,64 @@
+name: Sync TradingView Data
+
+# TradingView 数据采集（独立管道，与 Yahoo 管道互不干扰）
+# 用 tvdatafeed（TradingView WebSocket）拉取美股全周期 K 线
+# 写入独立 R2 bucket: stocks-tv
+#
+# 流程：
+#   1. 拉取 美股 Russell1000 全部周期（日K/1m/5m/15m/30m/1h/周K/月K）
+#   2. gzip 压缩写入 R2 stocks-tv
+#
+# 频率：每 30 分钟增量；全量由 workflow_dispatch 手动触发
+
+on:
+  schedule:
+    # 每 30 分钟
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "区域（目前仅 us）"
+        required: false
+        default: "us"
+        type: choice
+        options:
+          - us
+      interval:
+        description: "周期：all=全部 / 单周期"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - 1d
+          - 1h
+          - 1m
+
+env:
+  PYTHON_VERSION: "3.12"
+
+concurrency:
+  group: sync-tv
+  cancel-in-progress: true
+
+jobs:
+  sync-tv:
+    name: Sync · TradingView 美股全周期
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install tvdatafeed (from GitHub)
+        run: |
+          pip install -q "git+https://github.com/rongardF/tvdatafeed.git"
+      - name: Sync TradingView → R2 stocks-tv
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: stocks-tv
+        run: |
+          INTERVAL="${{ github.event.inputs.interval || 'all' }}"
+          python scripts/fetch_tv.py --region us --interval "$INTERVAL"
