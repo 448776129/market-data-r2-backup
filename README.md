@@ -62,9 +62,12 @@ https://stocks-api2.365200.xyz
 | `GET /kline` | K 线数据（日K/1m/5m/15m/30m/1h） | `/kline?symbol=AAPL&interval=1d&limit=5` |
 | `GET /price` | 实时价格（当场调取 Yahoo） | `/price?symbol=AAPL` |
 | `GET /screener` | 选股器（读 KV 快照过滤） | `/screener?scope=daily:us&ma5_gt_ma10=true&rsi14_lt=30` |
-| `GET /news` | 聚合新闻（雅虎+东方财富） | `/news?limit=50` |
+| `GET /news` | 聚合新闻（5源：雅虎/东财/同花顺/新浪/金十）| `/news?limit=50` |
 | `GET /news-yh` | 雅虎香港头条（缓存） | `/news-yh?limit=20` |
 | `GET /news-em` | 东方财富 7x24h（缓存） | `/news-em?limit=80` |
+| `GET /news-ths` | 同花顺 7x24 快讯 | `/news-ths?limit=50` |
+| `GET /news-sina` | 新浪 7x24 财经 | `/news-sina?limit=50` |
+| `GET /news-jin10` | 金十数据快讯 | `/news-jin10?limit=50` |
 | `GET /news-yh/live` | 实时拉取雅虎香港头条 | `/news-yh/live?limit=20` |
 | `GET /news-em/live` | 实时拉取东方财富 7x24h | `/news-em/live?limit=80` |
 | `GET /quote` | 个股元数据 | `/quote?symbol=0700.HK` |
