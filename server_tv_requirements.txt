@@ -1,0 +1,5 @@
+# 服务器版 TradingView 服务依赖
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+# tvdatafeed 从 GitHub 安装（PyPI 无此包）
+git+https://github.com/rongardF/tvdatafeed.git

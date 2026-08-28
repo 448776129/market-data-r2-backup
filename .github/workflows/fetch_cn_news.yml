@@ -1,0 +1,39 @@
+name: Fetch CN News (THS + Sina + Jin10)
+
+# 新增新闻源采集：同花顺 + 新浪 + 金十数据
+# 与现有 Yahoo/东方财富 新闻管道独立，存储到 R2/KV（news/ths.json 等）
+# 每 5 分钟运行一次
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+concurrency:
+  group: fetch-cn-news
+  cancel-in-progress: true
+
+jobs:
+  fetch-cn-news:
+    name: CN News (THS + Sina + Jin10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Fetch CN news → R2 + KV
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
+        run: python scripts/fetch_news_cn.py --source all

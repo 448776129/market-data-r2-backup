@@ -832,12 +832,67 @@ async function handleLiveNews(which, params, env, ctx) {
 
 // ============================================================
 // 聚合新闻
-//   /news-yh → 雅虎香港财经头条（繁体）
-//   /news-em → 东方财富 7x24h 快讯（简体）
-//   /news    → 以上两源合并按发布时间倒序（扁平列表）
+//   /news-yh      → 雅虎香港财经头条（繁体）
+//   /news-em      → 东方财富 7x24h 快讯（简体）
+//   /news-ths     → 同花顺 7x24 快讯
+//   /news-sina    → 新浪 7x24 财经
+//   /news-jin10   → 金十数据快讯
+//   /news         → 以上 5 源合并按发布时间倒序（扁平列表）
 // 默认 limit = 20；?limit=N 获取更多或更少；?help=1 返回文档。
+// 单独源接口：/news-ths /news-sina /news-jin10
 // ============================================================
 const DEFAULT_NEWS_LIMIT = 20;
+
+// 各通道的 KV/R2 key 与标签
+const NEWS_CHANNELS = {
+  yh: { name: "雅虎香港", channel: "yahoo_hk" },
+  em: { name: "东方财富", channel: "eastmoney" },
+  ths: { name: "同花顺", channel: "ths" },
+  sina: { name: "新浪财经", channel: "sina" },
+  jin10: { name: "金十数据", channel: "jin10" },
+};
+
+// 各源 -> 标准化字段（供聚合）
+function normalizeNews(channel, n) {
+  switch (channel) {
+    case "yahoo_hk":
+      return {
+        channel, title: n.title || "", url: n.url || null, digest: null,
+        pub_ts: n.pub_ts || null, pub_time: n.pub_time || null,
+        rel_time: n.rel_time || null, publisher: n.publisher || n.source || null,
+      };
+    case "eastmoney":
+      return {
+        channel, title: n.title || "", url: n.url_pc || n.url_mobile || null,
+        digest: n.digest || null, pub_ts: n.pub_ts || null,
+        pub_time: n.pub_time || null, showtime: n.showtime || null,
+        editor: n.editor || null, publisher: "东方财富",
+      };
+    case "ths":
+      return {
+        channel, title: n.title || "", url: n.url || null,
+        digest: n.digest || null, pub_ts: n.pub_ts || null,
+        pub_time: n.pub_time || null, tag: n.tag || null,
+        publisher: n.source || "同花顺",
+      };
+    case "sina":
+      return {
+        channel, title: n.title || "", url: n.url || null,
+        digest: n.digest || null, pub_ts: n.pub_ts || null,
+        pub_time: n.pub_time || null, create_time: n.create_time || null,
+        publisher: n.source || "新浪财经",
+      };
+    case "jin10":
+      return {
+        channel, title: n.title || "", url: n.url || null,
+        digest: n.digest || null, pub_ts: n.pub_ts || null,
+        pub_time: n.pub_time || null,
+        publisher: n.source || "金十数据",
+      };
+    default:
+      return { channel, title: n.title || "", url: n.url || null, digest: n.digest || null };
+  }
+}
 
 async function handleAggNews(which, params, env) {
   if (params.get("help") === "1") {
@@ -845,18 +900,31 @@ async function handleAggNews(which, params, env) {
       endpoints: {
         "/news-yh": {
           description: "雅虎香港财经头条（hk.finance.yahoo.com/topic/latest-news/），中文繁体。",
-          source_url: "https://hk.finance.yahoo.com/topic/latest-news/",
           params: { limit: `可选：返回条数，默认 ${DEFAULT_NEWS_LIMIT}` },
           example: `${API_BASE}/news-yh?limit=50`,
         },
         "/news-em": {
           description: "东方财富 7x24h 财经快讯（kuaixun.eastmoney.com），中文简体。",
-          source_url: "https://kuaixun.eastmoney.com/",
           params: { limit: `可选：返回条数，默认 ${DEFAULT_NEWS_LIMIT}，最多 80` },
           example: `${API_BASE}/news-em?limit=80`,
         },
+        "/news-ths": {
+          description: "同花顺 7x24 快讯（news.10jqka.com.cn）。",
+          params: { limit: `可选：返回条数，默认 ${DEFAULT_NEWS_LIMIT}` },
+          example: `${API_BASE}/news-ths?limit=50`,
+        },
+        "/news-sina": {
+          description: "新浪 7x24 财经（zhibo.sina.com.cn）。",
+          params: { limit: `可选：返回条数，默认 ${DEFAULT_NEWS_LIMIT}` },
+          example: `${API_BASE}/news-sina?limit=50`,
+        },
+        "/news-jin10": {
+          description: "金十数据快讯（www.jin10.com）。",
+          params: { limit: `可选：返回条数，默认 ${DEFAULT_NEWS_LIMIT}` },
+          example: `${API_BASE}/news-jin10?limit=50`,
+        },
         "/news": {
-          description: "聚合新闻：雅虎香港头条 + 东方财富 7x24h 合并，扁平列表按发布时间倒序。",
+          description: "聚合新闻：雅虎香港 + 东方财富 + 同花顺 + 新浪 + 金十 五源合并，按发布时间倒序。",
           params: { limit: `可选：返回条数，默认 ${DEFAULT_NEWS_LIMIT}` },
           example: `${API_BASE}/news?limit=50`,
         },
@@ -869,7 +937,7 @@ async function handleAggNews(which, params, env) {
 
   // 直连 KV（新闻是小 JSON，KV 读几乎免费 + 低延迟），KV 没有再回退 R2。
   // 这样命中时完全不走 R2 binding → R2 Class B 为 0，Worker CPU 更低。
-  async function loadNews(name /* yh | em */) {
+  async function loadNews(name /* yh | em | ths | sina | jin10 */) {
     // 先 KV
     if (env.STATIC_KV) {
       try {
@@ -882,15 +950,17 @@ async function handleAggNews(which, params, env) {
     return fetchUpstream(`news/${name}.json`, env);
   }
 
-  if (["yh", "em"].includes(which)) {
+  // 单源接口
+  if (NEWS_CHANNELS[which]) {
     const text = await loadNews(which);
     if (text === null) {
-      return error(`暂未采集到${which === "yh" ? "雅虎香港" : "东方财富"}新闻。news/${which}.json 未入库。`, 404);
+      return error(`暂未采集到${NEWS_CHANNELS[which].name}新闻。news/${which}.json 未入库。`, 404);
     }
     try {
       const data = JSON.parse(text);
       const list = (Array.isArray(data.news) ? data.news : []).slice(0, limit);
       return json({
+        source: which,
         total: Array.isArray(data.news) ? data.news.length : list.length,
         count: list.length,
         limit,
@@ -902,45 +972,20 @@ async function handleAggNews(which, params, env) {
   }
 
   if (which === "all") {
-    const [yhRaw, emRaw] = await Promise.all([
-      loadNews("yh"),
-      loadNews("em"),
-    ]);
+    // 并行加载 5 源
+    const keys = Object.keys(NEWS_CHANNELS);
+    const raws = await Promise.all(keys.map((k) => loadNews(k)));
 
     const items = [];
-    if (yhRaw) {
+    for (let i = 0; i < keys.length; i++) {
+      const channelKey = keys[i];
+      const channelName = NEWS_CHANNELS[channelKey].channel;
+      const raw = raws[i];
+      if (!raw) continue;
       try {
-        const d = JSON.parse(yhRaw);
+        const d = JSON.parse(raw);
         for (const n of d.news || []) {
-          items.push({
-            channel: "yahoo_hk",
-            title: n.title,
-            url: n.url,
-            digest: null,
-            pub_ts: n.pub_ts,
-            pub_time: n.pub_time,
-            rel_time: n.rel_time || null,
-            publisher: n.publisher || n.source || null,
-          });
-        }
-      } catch {}
-    }
-    if (emRaw) {
-      try {
-        const d = JSON.parse(emRaw);
-        for (const n of d.news || []) {
-          items.push({
-            channel: "eastmoney",
-            title: n.title,
-            url: n.url_pc || n.url_mobile || null,
-            digest: n.digest || null,
-            pub_ts: n.pub_ts || null,
-            pub_time: n.pub_time || null,
-            showtime: n.showtime || null,
-            editor: n.editor || null,
-            publisher: "东方财富",
-            comment_num: n.comment_num || 0,
-          });
+          items.push(normalizeNews(channelName, n));
         }
       } catch {}
     }
@@ -1122,6 +1167,9 @@ function handleStatus(request) {
       news: `${API_BASE}/news`,
       "news-yh": `${API_BASE}/news-yh`,
       "news-em": `${API_BASE}/news-em`,
+      "news-ths": `${API_BASE}/news-ths`,
+      "news-sina": `${API_BASE}/news-sina`,
+      "news-jin10": `${API_BASE}/news-jin10`,
       "news-yh/live": `${API_BASE}/news-yh/live`,
       "news-em/live": `${API_BASE}/news-em/live`,
       universe: `${API_BASE}/universe`,
@@ -1653,6 +1701,9 @@ const CACHE_TTL = {
   "news-yh": 60, // Yahoo HK 头条：每 5 分钟采集，缓存 60s
   "news-em": 30, // 东方财富 7x24h：每 5 分钟采集但内容更新快，缓存 30s
   "news-all": 30,
+  "news-ths": 30,
+  "news-sina": 30,
+  "news-jin10": 30,
   screener: 15, // 选股快照：KV 毫秒级读，缓存 15s 平衡新鲜与额度
 };
 
@@ -1693,6 +1744,12 @@ export default {
         edgeCache(url.href, ttl, env, ctx, () => handleAggNews("yh", params, env)),
       "/news-em": (ttl) =>
         edgeCache(url.href, ttl, env, ctx, () => handleAggNews("em", params, env)),
+      "/news-ths": (ttl) =>
+        edgeCache(url.href, ttl, env, ctx, () => handleAggNews("ths", params, env)),
+      "/news-sina": (ttl) =>
+        edgeCache(url.href, ttl, env, ctx, () => handleAggNews("sina", params, env)),
+      "/news-jin10": (ttl) =>
+        edgeCache(url.href, ttl, env, ctx, () => handleAggNews("jin10", params, env)),
       "/news": (ttl) =>
         edgeCache(url.href, ttl, env, ctx, () => handleAggNews("all", params, env)),
       "/news-yh/live": () =>
@@ -1709,7 +1766,7 @@ export default {
     }
 
     return error(
-      "Not found. Use /, /kline, /price, /download, /quote, /news, /news-yh, /news-em, /news-yh/live, /news-em/live, /universe, /indices, /symbols, /screener, /status",
+      "Not found. Use /, /kline, /price, /download, /quote, /news, /news-yh, /news-em, /news-ths, /news-sina, /news-jin10, /news-yh/live, /news-em/live, /universe, /indices, /symbols, /screener, /status",
       404
     );
   },

@@ -1,0 +1,28 @@
+# 服务器版 TradingView 服务 Dockerfile（参考 stocks-API 的 Docker 方式）
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV PYTHONUNBUFFERED=1
+
+# 系统依赖
+RUN apt-get update -qq && apt-get install -y -qq git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 复制项目（需包含 scripts/r2s3.py + server_tv.py + data/universe）
+COPY . /app/
+
+# 安装依赖
+RUN pip install --no-cache-dir -q -r server_tv_requirements.txt
+
+# 采集间隔与区域通过环境变量配置
+ENV TV_SYNC_INTERVAL=1
+ENV TV_REGIONS=us
+ENV PORT=3216
+
+EXPOSE 3216
+
+# 启动：后台采集线程 + FastAPI
+CMD ["sh", "-c", "python server_tv.py"]
