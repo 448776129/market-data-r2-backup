@@ -75,6 +75,15 @@ def fetch_ths(page: int = 1) -> dict:
 
 # ── 新浪 7x24 ──────────────────────────────────────────────────
 
+def _parse_cn_time(t):
+    """解析 '2026-08-28 18:40:29' 到 unix 秒。"""
+    try:
+        dt = datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+        return int(dt.astimezone().timestamp())
+    except Exception:
+        return None
+
+
 def fetch_sina(page: int = 1, page_size: int = 40) -> dict:
     """新浪 7x24 财经（zhibo.sina.com.cn 公开 JSON API）。"""
     url = ("https://zhibo.sina.com.cn/api/zhibo/feed"
@@ -84,14 +93,15 @@ def fetch_sina(page: int = 1, page_size: int = 40) -> dict:
 
     items = []
     for n in feed:
+        pub_ts = _parse_cn_time(n.get("create_time"))
         items.append({
             "id": str(n.get("id")),
             "title": n.get("rich_text") or "",
             "digest": n.get("rich_text") or "",
             "url": n.get("docurl") or "https://zhibo.sina.com.cn/finance/152",
             "source": "新浪财经",
-            "pub_ts": None,
-            "pub_time": None,
+            "pub_ts": pub_ts,
+            "pub_time": n.get("create_time"),
             "create_time": n.get("create_time"),
             "tag": str(n.get("tab") or ""),
             "anchor": (n.get("anchor") or {}).get("name") if n.get("anchor") else None,
@@ -118,9 +128,10 @@ def fetch_jin10() -> dict:
         d = n.get("data") or {}
         title = (d.get("title") or "").strip()
         content = (d.get("content") or "").strip()
-        # type=1 是特殊卡片（如行情），跳过；type=0 是普通快讯
-        if n.get("type") not in (0, None):
+        # 过滤空内容/特殊卡片
+        if not (title or content):
             continue
+        pub_ts = _parse_cn_time(n.get("time"))
         items.append({
             "id": str(n.get("id")),
             "title": title or content[:60],
@@ -129,7 +140,7 @@ def fetch_jin10() -> dict:
             "url": f"https://www.jin10.com/flash/{n.get('id')}",
             "source": d.get("source") or "金十数据",
             "pub_time": n.get("time"),
-            "pub_ts": None,
+            "pub_ts": pub_ts,
             "exclusive_to": d.get("exclusive_to"),
         })
     return {"source": "jin10", "count": len(items), "news": items, "collected_at": _now_iso()}
