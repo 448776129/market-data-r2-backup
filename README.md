@@ -18,6 +18,34 @@
 - **动态接口**：Worker 免费提供 JSON API，无需 Key
 - **选股器**：技术指标预计算 → KV 快照 → Worker 毫秒级选股过滤（MA/MACD/RSI/KDJ/布林带等）
 
+## 双数据管道（Yahoo + TradingView）
+
+本项目维护**两套完全独立的行情管道**，存储与 API 互不干扰：
+
+| | Yahoo 管道（默认） | TradingView 管道（新增） |
+|:----|:----|:----|
+| **数据源** | Yahoo chart API | TradingView WebSocket（tvdatafeed）|
+| **采集** | GitHub Actions（`sync_data.yml` 等）| GitHub Actions（`sync_tv.yml`）|
+| **R2 bucket** | `stocks-api2` | `stocks-tv` |
+| **KV namespace** | `stocksAPI2` | `stocksTV` |
+| **Worker** | `stocks-api2` | `stocks-tv` |
+| **域名** | `https://stocks-api2.365200.xyz` | `https://stocks-tv.365200.xyz` |
+
+**TradingView 管道特点**：
+- 1h/分钟级 K 线 Volume 全真实（Yahoo 盘前盘后 Volume=0）
+- 时间戳整点规整
+- 周期覆盖：日K / 1m / 5m / 15m / 30m / 1h / 周K / 月K
+- 采集：`scripts/fetch_tv.py`（NYSE/NASDAQ/AMEX 交易所自动探测）
+- API：`api-tv/`（独立 Worker）
+
+**TradingView API**：
+```
+GET https://stocks-tv.365200.xyz/kline?symbol=AAPL&interval=1d&limit=5
+GET https://stocks-tv.365200.xyz/kline?symbol=AAPL&interval=1h&limit=50
+GET https://stocks-tv.365200.xyz/status
+```
+
+
 ## 线上接口
 
 Worker 部署在 Cloudflare Workers，可通过自定义域名访问：
