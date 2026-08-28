@@ -1,0 +1,20 @@
+name = "stocks-tv"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# 独立 TradingView 数据 API（与 stocks-api2 Yahoo 管道互不干扰）
+# 数据源：R2 bucket stocks-tv（由 sync_tv.yml 采集）
+# 自定义域名（面板绑定）：stocks-tv.365200.xyz → stocks-tv
+
+# R2 存储绑定：TradingView 独立 bucket
+[[r2_buckets]]
+binding = "MARKET_DATA_R2"
+bucket_name = "stocks-tv"
+
+# KV 存储绑定（TradingView 独立 namespace stocksTV）
+[[kv_namespaces]]
+binding = "STATIC_KV"
+id = "739a29e9bd4a4979986339614bf840bd"
+
+[observability]
+enabled = true
