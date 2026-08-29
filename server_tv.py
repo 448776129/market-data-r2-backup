@@ -308,13 +308,161 @@ def create_app():
 
     app = FastAPI(title="TradingView 行情 API", description="服务器版常驻采集 + 接口")
 
+    WEB_HTML = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TradingView 行情</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0f1420;color:#e8ecf4}
+.header{padding:16px 24px;background:#1a2234;border-bottom:1px solid #2a3550;display:flex;align-items:center;gap:12px}
+.header h1{font-size:18px;margin:0;color:#4d9fff}
+.header .sub{font-size:12px;color:#8b96ad}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 24px}
+.card{background:#161e30;border:1px solid #26324a;border-radius:10px;padding:16px;margin-bottom:16px}
+.card h3{margin:0 0 12px;font-size:14px;color:#9fb4d8}
+.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+input,select,button{padding:8px 10px;border-radius:6px;border:1px solid #33405e;background:#1d2740;color:#e8ecf4;font-size:13px}
+button{cursor:pointer;background:#2563eb;border-color:#2563eb;font-weight:600}
+button:hover{background:#3b82f6}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+canvas{width:100%;height:340px;background:#111827;border-radius:8px;margin-top:8px}
+#quote{font-size:22px;font-weight:700}
+#quote .chg-up{color:#22c55e}#quote .chg-down{color:#ef4444}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #222c44}
+th{color:#7d8db0;font-weight:500}
+.ch-up{color:#22c55e}.ch-down{color:#ef4444}
+.news-item{padding:8px 0;border-bottom:1px solid #222c44;font-size:13px}
+.news-item .t{color:#e8ecf4}.news-item .src{color:#6b7ba0;font-size:11px;margin-left:8px}
+.news-item .time{color:#556383;font-size:11px}
+.badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;background:#1d2740;color:#9fb4d8;margin-left:6px}
+</style></head><body>
+<div class="header">
+  <h1>📈 TradingView 行情</h1>
+  <span class="sub">服务器常驻采集 · 分钟级实时 · 数据源 TradingView</span>
+</div>
+<div class="wrap">
+<div class="grid">
+<div>
+  <div class="card">
+    <h3>K线查询</h3>
+    <div class="row">
+      <input id="sym" placeholder="股票代码 e.g. AAPL" value="AAPL">
+      <select id="itv">
+        <option value="1m">1分钟</option><option value="5m">5分钟</option>
+        <option value="15m">15分钟</option><option value="30m">30分钟</option>
+        <option value="1h" selected>1小时</option><option value="1d">日K</option>
+        <option value="1wk">周K</option><option value="1mo">月K</option>
+      </select>
+      <input id="bars" placeholder="根数" value="120" style="width:60px">
+      <button onclick="loadKline()">查询</button>
+    </div>
+    <div id="quote" style="margin:8px 0"></div>
+    <canvas id="cv"></canvas>
+  </div>
+  <div class="card">
+    <h3>最近行情</h3>
+    <table id="screener-tbl"><thead><tr>
+      <th>代码</th><th>价格</th><th>涨跌%</th><th>成交量</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+<div>
+  <div class="card">
+    <h3>实时快讯</h3>
+    <div class="row">
+      <select id="news-src">
+        <option value="all">全部</option><option value="yh">雅虎</option>
+        <option value="em">东财</option><option value="ths">同花顺</option>
+        <option value="sina">新浪</option><option value="jin10">金十</option>
+      </select>
+      <button onclick="loadNews()">刷新</button>
+    </div>
+    <div id="news"></div>
+  </div>
+</div>
+</div>
+</div>
+<script>
+const API='/';
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function drawChart(rows){
+  const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+  const W=cv.width=Math.floor(cv.clientWidth*2),H=cv.height=680;
+  ctx.clearRect(0,0,W,H);
+  if(!rows||rows.length<2){ctx.fillStyle='#8b96ad';ctx.fillText('暂无数据',20,30);return}
+  const closes=rows.map(r=>parseFloat(r.Close)), highs=rows.map(r=>parseFloat(r.High)), lows=rows.map(r=>parseFloat(r.Low));
+  const min=Math.min(...lows),max=Math.max(...highs),range=max-min||1;
+  const pad=40,xs=W/(rows.length),y=v=>H-((v-min)/range)*(H-pad*2)-pad;
+  // 网格
+  ctx.strokeStyle='#222c44';ctx.fillStyle='#6b7ba0';ctx.font='12px sans-serif';
+  for(let i=0;i<5;i++){const gy=pad+(H-2*pad)*i/4;ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();
+    const v=max-range*i/4;ctx.fillText(v.toFixed(2),5,gy-4)}
+  // 蜡烛
+  rows.forEach((r,i)=>{
+    const o=parseFloat(r.Open),c=parseFloat(r.Close),h=parseFloat(r.High),l=parseFloat(r.Low);
+    const up=c>=o,x=(i+0.5)*xs,upc='#22c55e',dnc='#ef4444',col=up?upc:dnc;
+    ctx.strokeStyle=col;ctx.fillStyle=col;
+    ctx.beginPath();ctx.moveTo(x,y(h));ctx.lineTo(x,y(l));ctx.stroke();
+    const bw=Math.max(2,xs*0.6),top=Math.min(y(o),y(c)),bh=Math.max(1,Math.abs(y(o)-y(c)));
+    ctx.fillRect(x-bw/2,top,bw,bh);
+  });
+}
+async function loadKline(){
+  const sym=document.getElementById('sym').value.trim().toUpperCase();
+  const itv=document.getElementById('itv').value;
+  const bars=document.getElementById('bars').value||100;
+  if(!sym)return;
+  try{
+    const r=await fetch(API+'kline?symbol='+encodeURIComponent(sym)+'&interval='+itv+'&limit='+bars);
+    const d=await r.json();
+    if(d.error){document.getElementById('quote').innerHTML=esc(d.error);return}
+    const rows=d.data||[];
+    if(rows.length){
+      const last=rows[rows.length-1],prev=rows.length>1?rows[rows.length-2]:null;
+      const chg=prev?(parseFloat(last.Close)-parseFloat(prev.Close))/parseFloat(prev.Close)*100:0;
+      const cls=chg>=0?'ch-up':'ch-down';
+      document.getElementById('quote').innerHTML=
+        '${esc(sym)} <span>'+parseFloat(last.Close).toFixed(2)+'</span> '+
+        '<span class="'+cls+'">'+chg.toFixed(2)+'%</span>'+
+        '<span class="badge">'+itv+'</span> <span class="badge">'+rows.length+'根</span>';
+    }
+    drawChart(rows);
+  }catch(e){document.getElementById('quote').innerHTML=esc('查询失败: '+e.message)}
+}
+async function loadScreener(){
+  try{
+    // 用纳指100快照（scanner 不支持，这里用已采集的股票演示最近行情）
+    const r=await fetch(API+'kline?symbol=AAPL&interval=1d&limit=2');
+    const d=await r.json();
+    // 简单展示：不额外请求，占位由其他接口补充
+  }catch(e){}
+}
+async function loadNews(){
+  const src=document.getElementById('news-src').value;
+  try{
+    // 新闻来自 stocks-api2（Yahoo 管道聚合5源）
+    const r=await fetch('https://stocks-api2.365200.xyz/news?limit=30');
+    const d=await r.json();
+    const items=d.items||[];
+    const el=document.getElementById('news');
+    el.innerHTML=items.map(n=>
+      '<div class="news-item"><span class="t">'+esc(n.title||n.digest||'')+'</span>'+
+      '<span class="src">'+esc(n.publisher||n.channel||'')+'</span>'+
+      '<span class="time">'+esc(n.pub_time||'')+'</span></div>'
+    ).join('')||'<div class="news-item">暂无新闻</div>';
+  }catch(e){document.getElementById('news').innerHTML=esc('加载失败: '+e.message)}
+}
+loadKline();loadNews();
+setInterval(loadKline,30000);setInterval(loadNews,60000);
+</script>
+</body></html>"""
+
     @app.get("/")
     def root():
-        return {
-            "service": "TradingView API (server)",
-            "endpoints": {"/kline": "K线", "/status": "服务信息"},
-            "note": "由服务器常驻进程采集，分钟级实时。",
-        }
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(WEB_HTML)
 
     @app.get("/kline")
     def kline(symbol: str = Query(...), interval: str = Query("1d"),

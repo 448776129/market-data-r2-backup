@@ -1,28 +1,33 @@
-# 服务器版 TradingView 服务 Dockerfile（参考 stocks-API 的 Docker 方式）
-FROM python:3.12-slim
+# 服务器版 TradingView 服务 Dockerfile
+# 基于 python:3.14-slim（服务器已有该镜像系列，stocks-API 在用）
+# tvDatafeed 已随源码打包上传（本机拷贝），本地安装避免 GitHub 不可达
+FROM python:3.14-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV PYTHONUNBUFFERED=1
 
-# 系统依赖
-RUN apt-get update -qq && apt-get install -y -qq git curl \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
-# 复制项目（需包含 scripts/r2s3.py + server_tv.py + data/universe）
+# 复制项目（server_tv.py + r2s3.py + universe + tvDatafeed 源码）
 COPY . /app/
 
-# 安装依赖
-RUN pip install --no-cache-dir -q -r server_tv_requirements.txt
+# 安装依赖：fastapi/uvicorn 用 pip（阿里云镜像，服务器国内）；tvDatafeed 本地目录安装
+RUN pip config set global.index-url http://mirrors.cloud.aliyuncs.com/pypi/simple/ \
+    && pip config set global.trusted-host mirrors.cloud.aliyuncs.com \
+    && pip install --no-cache-dir -q \
+      "fastapi>=0.110.0" \
+      "uvicorn[standard]>=0.29.0" \
+      "websocket-client" \
+      "requests" \
+      && pip install --no-cache-dir -q ./tvDatafeed
 
-# 采集间隔与区域通过环境变量配置
+# 采集配置（环境变量可覆盖）
 ENV TV_SYNC_INTERVAL=1
 ENV TV_REGIONS=us
 ENV PORT=3216
+ENV R2_BUCKET=stocks-tv
 
 EXPOSE 3216
 
-# 启动：后台采集线程 + FastAPI
 CMD ["sh", "-c", "python server_tv.py"]
