@@ -15,6 +15,9 @@ name: Sync TradingView ETF
 #   22:00 UTC = 美东 18:00，收盘后 2 小时，当日日K已定稿
 #   06:00 UTC = 美东 02:00，盘前补采
 # 全量/单周期由 workflow_dispatch 手动触发
+#
+# 默认 interval=daily（1d/1wk/1mo）。ETF 以日线回测为主，分钟级数据价值低但
+# 成本高（826 只 × 全 8 周期 ≈ 6600 次请求）。需要分钟级时手动选 all。
 
 on:
   schedule:
@@ -22,11 +25,12 @@ on:
   workflow_dispatch:
     inputs:
       interval:
-        description: "周期：all=全部 / 单周期"
+        description: "周期：daily=日线级(1d/1wk/1mo，默认，快) / all=全部8个(含分钟级，很慢且耗配额)"
         required: false
-        default: "all"
+        default: "daily"
         type: choice
         options:
+          - daily
           - all
           - 1d
           - 1h
@@ -66,7 +70,10 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: stocks-tv
         run: |
-          INTERVAL="${{ github.event.inputs.interval || 'all' }}"
+          INTERVAL="${{ github.event.inputs.interval || 'daily' }}"
           LIMIT="${{ github.event.inputs.limit || '0' }}"
+          # daily -> 日线级三周期。826 只 × 全 8 周期约 6600 次请求，
+          # 每天跑 2 次会远超 GitHub 免费账户 2000 分钟/月额度，故默认只采日线级。
+          if [ "$INTERVAL" = "daily" ]; then INTERVAL="1d,1wk,1mo"; fi
           python scripts/fetch_tv.py --region us --universe etf \
             --interval "$INTERVAL" --limit "$LIMIT"

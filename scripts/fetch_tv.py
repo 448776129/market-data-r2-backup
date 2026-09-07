@@ -36,7 +36,6 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,8 +71,9 @@ DEFAULT_BARS = {
     "1mo": 150,
 }
 
-# 并发（TradingView WS 单连接，内部串行；多 symbol 用一个连接）
-CONCURRENCY = int(os.environ.get("FETCH_CONCURRENCY", "4"))
+# 并发：本脚本刻意保持串行。tvdatafeed 底层是单个 WebSocket 连接，
+# 多线程并发调用会导致大面积 "Connection timed out"（详见 main() 采集循环注释）。
+# 环境变量 FETCH_CONCURRENCY 仅用于 Yahoo 管道的 HTTP 请求，对 TV 管道无效。
 
 # 可选股票清单：名称 -> universe 文件名
 UNIVERSE_FILES = {
@@ -186,20 +186,25 @@ def main() -> int:
     parser.add_argument("--region", default="us", help="区域（目前仅 us）")
     parser.add_argument("--universe", default="us",
                         help=f"股票清单，逗号分隔。可选: {list(UNIVERSE_FILES)}（默认 us）")
-    parser.add_argument("--interval", default="all", help="周期：all / 1d / 1m / 5m / 15m / 30m / 1h / 1wk / 1mo")
+    parser.add_argument("--interval", default="all",
+                        help="周期：all=全部8个 / 单个如 1d / 逗号组合如 1d,1wk,1mo")
     parser.add_argument("--limit", type=int, default=0, help="限制拉取股票数（0=全部）")
     args = parser.parse_args()
 
     uni_names = [n.strip() for n in args.universe.split(",") if n.strip()]
 
-    # 选择周期
+    # 选择周期（支持逗号组合，如 1d,1wk,1mo）
     if args.interval == "all":
         intervals = list(TV_INTERVALS.keys())
     else:
-        if args.interval not in TV_INTERVALS:
-            print(f"未知周期: {args.interval}，可选: {list(TV_INTERVALS.keys())}")
-            return 1
-        intervals = [args.interval]
+        intervals = []
+        for iv in args.interval.split(","):
+            iv = iv.strip()
+            if iv not in TV_INTERVALS:
+                print(f"未知周期: {iv}，可选: {list(TV_INTERVALS.keys())} 或 all")
+                return 1
+            if iv not in intervals:
+                intervals.append(iv)
 
     # 股票代码清单（支持多清单合并去重）
     symbols = load_universe(uni_names)
@@ -218,29 +223,49 @@ def main() -> int:
     from tvDatafeed import TvDatafeed
     tv = TvDatafeed()
 
-    # 逐周期采集（每周期一个连接，避免 WS 状态混淆）
+    # 逐周期采集：串行 + 分批轮询
+    # 重要：tvdatafeed 底层是单个 WebSocket 连接，多线程并发读写会破坏 WS
+    # 状态机，表现为大量 "Connection timed out / no data, please check the
+    # exchange and symbol"。实测 826 只 ETF 以 CONCURRENCY=4 并发时成功率 <1%
+    # （仅字母序最前几只成功），改串行后恢复正常。故不要改回线程池。
+    BATCH_SIZE = int(os.environ.get("TV_BATCH_SIZE", "60"))
+    BATCH_DELAY_SEC = float(os.environ.get("TV_BATCH_DELAY", "2"))
+    MAX_CONSEC_FAIL = int(os.environ.get("TV_MAX_CONSEC_FAIL", "20"))
+
     for interval in intervals:
         print(f"\n--- 周期 {interval} ---")
         ok = err = skip = 0
         total_bars = 0
+        consec_fail = 0
         # 交易所前缀（美股多个交易所，逐个尝试）
         exchanges = ["NYSE", "NASDAQ", "AMEX"]
-        with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-            futures = {
-                pool.submit(fetch_one, tv, args.region, sym, interval, exchanges): sym
-                for sym in symbols
-            }
-            for fut in as_completed(futures):
-                r = fut.result()
-                if r["status"] == "ok":
+        for i in range(0, len(symbols), BATCH_SIZE):
+            batch = symbols[i:i + BATCH_SIZE]
+            for sym in batch:
+                try:
+                    r = fetch_one(tv, args.region, sym, interval, exchanges)
+                except Exception as exc:  # noqa: BLE001
+                    r = {"status": f"exception: {exc}"}
+                if r.get("status") == "ok":
                     ok += 1
-                    total_bars += r["bars"]
-                elif r["status"] == "no_data":
-                    skip += 1
+                    total_bars += r.get("bars", 0)
+                    consec_fail = 0
                 else:
-                    err += 1
-                    if err <= 3:
-                        print(f"  [ERR] {r['symbol']} {interval}: {r['status']}")
+                    skip += 1
+                    consec_fail += 1
+                    if skip <= 3:
+                        print(f"  [skip] {sym} {interval}: {r.get('status')}")
+                # 连续失败过多 → WS 多半已假死，重建连接
+                if consec_fail >= MAX_CONSEC_FAIL:
+                    print(f"  连续失败 {consec_fail} 次，重建 TvDatafeed 连接...", flush=True)
+                    try:
+                        tv = TvDatafeed()
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  重建连接失败: {exc}", flush=True)
+                    consec_fail = 0
+                    time.sleep(BATCH_DELAY_SEC)
+            if i + BATCH_SIZE < len(symbols):
+                time.sleep(BATCH_DELAY_SEC)
         print(f"  {interval}: ok={ok} skip={skip} err={err} bars={total_bars}")
 
     # 状态（用 json.dumps 保证 intervals/universe 是合法 JSON，而非 Python 字面量）
