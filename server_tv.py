@@ -336,7 +336,8 @@ def sync_loop_once(pool_type: str) -> None:
 
 # ── 后台采集线程 ────────────────────────────────────────────────
 
-_sync_thread: threading.Thread | None = None
+# 每个启用中的池一个线程（见 start_background_sync 说明）
+_sync_threads: list[threading.Thread] = []
 _sync_running = False
 
 # 各池的同步间隔（分钟）兜底值：高频 1 分钟，低频 30 分钟，ETF 3 小时
@@ -353,35 +354,41 @@ def _pool_interval_min(pool: str) -> int:
     return _POOL_INTERVAL_MIN.get(pool, 30)
 
 
-def _worker():
-    global _sync_running
-    _sync_running = True
-    last_sync: dict[str, float] = {}
-    pools = _active_pools()
-    # 启动先各同步一次
-    for pool in pools:
-        sync_loop_once(pool)
-        last_sync[pool] = time.time()
+def _pool_worker(pool: str) -> None:
+    """单个池的采集循环（每池一个线程）。
+
+    必须并行而非串行：ETF 池 826 只 × 4 周期单轮可达 1.5-3 小时，低频池
+    1022 只亦需数十分钟；若与高频池串行，会把 1 分钟间隔的高频池阻塞数小时，
+    实时性彻底失效。各池持有独立 TvDatafeed 连接（在 sync_loop_once 内创建）。
+    """
+    interval = _pool_interval_min(pool) * 60
+    last = 0.0  # 初值 0 → 启动后立即执行首轮
     while _sync_running:
-        time.sleep(5)  # 轻量轮询
-        for pool in pools:
-            interval = _pool_interval_min(pool) * 60
-            if time.time() - last_sync.get(pool, 0) >= interval:
-                sync_loop_once(pool)
-                last_sync[pool] = time.time()
+        if time.time() - last >= interval:
+            sync_loop_once(pool)
+            last = time.time()
+        time.sleep(5)
 
 
 def start_background_sync() -> None:
-    """启动后台采集线程（幂等）。"""
-    global _sync_thread
-    if _sync_thread and _sync_thread.is_alive():
+    """启动后台采集（每个池一个线程，幂等）。"""
+    global _sync_threads, _sync_running
+    if any(t.is_alive() for t in _sync_threads):
         return
     pools = _active_pools()
-    detail = " / ".join(f"{p} {_pool_interval_min(p)}分钟" for p in pools) or "无"
-    print(f"启动后台采集线程: 池类型={POOL_TYPE} → [{', '.join(pools) or 'none'}] "
-          f"({detail})", flush=True)
-    _sync_thread = threading.Thread(target=_worker, daemon=True)
-    _sync_thread.start()
+    if not pools:
+        print("未启用任何采集池（TV_POOL_TYPE=none），仅提供 API 不采集", flush=True)
+        return
+    detail = " / ".join(f"{p} {_pool_interval_min(p)}分钟" for p in pools)
+    print(f"启动后台采集: 池类型={POOL_TYPE} → [{', '.join(pools)}] ({detail})", flush=True)
+    print("  各池独立线程并行：长耗时池（low/etf）不会阻塞高频池", flush=True)
+    _sync_running = True
+    _sync_threads = [
+        threading.Thread(target=_pool_worker, args=(p,), daemon=True, name=f"tv-pool-{p}")
+        for p in pools
+    ]
+    for t in _sync_threads:
+        t.start()
 
 
 # ── FastAPI 接口 ────────────────────────────────────────────────
