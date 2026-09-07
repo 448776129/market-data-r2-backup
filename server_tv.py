@@ -116,9 +116,21 @@ def _fmt(v) -> str:
 
 
 def df_to_csv(df) -> str:
-    """tvdatafeed DataFrame → CSV 文本（兼容现有格式，带表头）。"""
+    """tvdatafeed DataFrame → CSV 文本（兼容现有格式，带表头）。
+    时间戳从 UTC 转美东时间（America/New_York，自动处理夏令时）。
+    """
     if df is None or len(df) == 0:
         return ""
+    # 确保 index 是 UTC 时区
+    from zoneinfo import ZoneInfo
+    et_tz = ZoneInfo("America/New_York")
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC")
+    elif str(df.index.tz) != "UTC":
+        df.index = df.index.tz_convert("UTC")
+    # 转 ET
+    df.index = df.index.tz_convert(et_tz)
+
     lines = ["Datetime,Open,High,Low,Close,Adj Close,Volume"]
     for idx, row in df.iterrows():
         dt_str = idx.strftime("%Y-%m-%d %H:%M:%S") if hasattr(idx, "strftime") else str(idx)
