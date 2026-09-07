@@ -16,6 +16,10 @@ venv/
 # 敏感文件（含真实凭据，禁止提交到公开仓库）
 SECRETS.md
 
+# 项目记忆：含账号 ID / 服务器 IP / 内网结构，仅限本地，禁止提交到公开仓库
+# 真实凭据统一存放于 .env（同样不提交）
+PROJECT_MEMORY.md
+
 # CodeBuddy 项目记忆（本地开发记录，不公开）
 .codebuddy/
 
