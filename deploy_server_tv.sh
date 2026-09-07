@@ -24,11 +24,14 @@ pip install -q -r server_tv_requirements.txt
 echo "=== 4. 配置 .env ==="
 if [ ! -f ".env" ]; then
     cat > .env <<'EOF'
-R2_ACCOUNT_ID=8e43ef2043266e0898cf9e02ca53df2f
+R2_ACCOUNT_ID=你的_Cloudflare_Account_ID
 R2_ACCESS_KEY_ID=你的_Access_Key_ID
 R2_SECRET_ACCESS_KEY=你的_Secret_Access_Key
 R2_BUCKET=stocks-tv
 TV_SYNC_INTERVAL=1
+# 采集池：high=纳指100(1分钟) / low=罗素1000(30分钟) / etf=ETF(3小时)
+#          both=low+high / all=low+etf+high / none=只提供 API 不采集
+TV_POOL_TYPE=high
 TV_REGIONS=us
 PORT=3216
 EOF

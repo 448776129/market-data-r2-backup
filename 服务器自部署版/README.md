@@ -70,12 +70,12 @@ crontab -l
 
 | 变量 | 值 |
 |:----|:----|
-| `R2_ACCOUNT_ID` | `8e43ef2043266e0898cf9e02ca53df2f` |
+| `R2_ACCOUNT_ID` | 你的 Cloudflare Account ID（32 位十六进制）|
 | `R2_ACCESS_KEY_ID` | 新账号 Access Key |
 | `R2_SECRET_ACCESS_KEY` | 新账号 Secret |
 | `R2_BUCKET` | `stocks-api2` |
 | `CLOUDFLARE_API_TOKEN` | 新账号 API Token（KV 写入用）|
-| `CLOUDFLARE_ACCOUNT_ID` | `8e43ef2043266e0898cf9e02ca53df2f` |
-| `KV_NAMESPACE_ID` | `6ec220d973654f7981364ac1340863df` |
+| `CLOUDFLARE_ACCOUNT_ID` | 同 `R2_ACCOUNT_ID` |
+| `KV_NAMESPACE_ID` | KV 命名空间 ID（面板查看）|
 | `YAHOO_DIRECT` | `1`（分钟K直连 Yahoo）|
 | `YAHOO_USE_PROXY` | 空（其他脚本直连；国内填 `1` 走反代）|

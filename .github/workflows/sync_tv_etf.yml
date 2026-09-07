@@ -1,0 +1,72 @@
+name: Sync TradingView ETF
+
+# 美股 ETF 采集（独立 workflow，与 sync_tv.yml 的股票池互不干扰）
+#
+# 复用 scripts/fetch_tv.py --universe etf，写入同一个 R2 bucket: stocks-tv
+# 命名空间与股票一致（us/），因为美股代码全局唯一，
+# 下游 /kline?symbol=QQQ 无需改动即可命中。
+#
+# 为什么独立成 workflow：
+#   ETF 约 826 只（已排除与 us.csv 同名的 5 个代码），× 4 周期耗时较长，
+#   若并入每 30 分钟的 sync_tv.yml 会挤占股票池时间并可能超时。
+#   ETF 以日线深采为主，每天 2 次即可满足回测需求。
+#
+# 频率：周一至周五 06:00 / 22:00 UTC
+#   22:00 UTC = 美东 18:00，收盘后 2 小时，当日日K已定稿
+#   06:00 UTC = 美东 02:00，盘前补采
+# 全量/单周期由 workflow_dispatch 手动触发
+
+on:
+  schedule:
+    - cron: "0 6,22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      interval:
+        description: "周期：all=全部 / 单周期"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - 1d
+          - 1h
+          - 1wk
+          - 1mo
+      limit:
+        description: "限制标的数量（0=全部，调试用）"
+        required: false
+        default: "0"
+        type: string
+
+env:
+  PYTHON_VERSION: "3.12"
+
+concurrency:
+  # 独立 group，避免与股票池 workflow 互相取消
+  group: sync-tv-etf
+  cancel-in-progress: true
+
+jobs:
+  sync-tv-etf:
+    name: Sync · TradingView ETF
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install tvdatafeed (from GitHub)
+        run: |
+          pip install -q "git+https://github.com/rongardF/tvdatafeed.git"
+      - name: Sync ETF → R2 stocks-tv
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: stocks-tv
+        run: |
+          INTERVAL="${{ github.event.inputs.interval || 'all' }}"
+          LIMIT="${{ github.event.inputs.limit || '0' }}"
+          python scripts/fetch_tv.py --region us --universe etf \
+            --interval "$INTERVAL" --limit "$LIMIT"

@@ -38,6 +38,18 @@
 - 采集：`scripts/fetch_tv.py`（NYSE/NASDAQ/AMEX 交易所自动探测）
 - API：`api-tv/`（独立 Worker）
 
+**TradingView 标的范围**（`--universe` 参数，可逗号组合）：
+
+| 清单 | 文件 | 数量 | 采集频率 | Workflow |
+|:----|:----|:----|:----|:----|
+| `us` | `us.csv`（罗素1000）| 1022 只 | 每 30 分钟 | `sync_tv.yml` |
+| `etf` | `etf.csv`（美股 ETF）| 826 只 | 每天 2 次（06:00 / 22:00 UTC）| `sync_tv_etf.yml` |
+| `nasdaq100` | `nasdaq100.csv` | 102 只 | 服务器高频池 1 分钟 | 常驻 `tv-server` |
+
+ETF 与股票共用 `us/` 命名空间（美股代码全局唯一），因此 `/kline?symbol=QQQ` 无需改动即可命中。
+`etf.csv` 与 `us.csv` 有 5 个同名代码（`O`/`ORCL`/`PSN`/`PSX`/`STAG`，实为普通股被误收录），
+加载时自动排除，避免两个池互相覆盖。
+
 **TradingView API**：
 ```
 GET https://stocks-tv.365200.xyz/kline?symbol=AAPL&interval=1d&limit=5
@@ -158,6 +170,8 @@ Cloudflare Worker（stockapi.365200.xyz）
 └── .github/workflows/
     ├── fetch_history.yml         # 全量历史（手动）
     ├── sync_data.yml             # 增量同步（每 30 分钟）
+    ├── sync_tv.yml               # TradingView 股票池（每 30 分钟）
+    ├── sync_tv_etf.yml           # TradingView ETF 池（每天 2 次）
     └── fetch_meta.yml            # meta 采集（手动）
 ```
 

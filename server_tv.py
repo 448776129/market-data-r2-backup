@@ -60,8 +60,22 @@ LOW_POOL = {
         "sync_min": 30,            # 每 30 分钟
     },
 }
+# ETF 池：美股 ETF 日线级深采（QQQ/TQQQ/SQQQ/SPY 等），用于回测与配置
+# 与 us.csv 共用命名空间，故排除同名代码（etf.csv 误收录了 O/ORCL/PSN/PSX/STAG 等普通股）
+ETF_POOL = {
+    "us": {
+        "file": "etf.csv",         # 美股 ETF ~831 只
+        "intervals": ["1d", "1h", "1wk", "1mo"],
+        "n_bars": 1500,
+        "sync_min": 180,           # 每 3 小时（830 只 × 4 周期，避免与低频池争抢）
+        "exclude": ["us.csv"],     # 排除已在股票池采集的同名代码，防止覆盖
+    },
+}
 
-# 池类型（环境变量）：TV_POOL_TYPE=high / low / both
+POOLS = {"high": HIGH_POOL, "low": LOW_POOL, "etf": ETF_POOL}
+
+# 池类型（环境变量）：
+#   high 高频 / low 低频 / etf ETF / both = low+high / all = low+etf+high
 POOL_TYPE = os.environ.get("TV_POOL_TYPE", "high")
 SYNC_INTERVAL_MIN = int(os.environ.get("TV_SYNC_INTERVAL", "1"))
 SYNC_REGIONS = os.environ.get("TV_REGIONS", "us").split(",")
@@ -183,14 +197,36 @@ def merge_csv(existing: str | None, new_csv: str) -> str:
 
 # ── 采集 ────────────────────────────────────────────────────────
 
-def _pool_symbols(region: str, file: str) -> list[str]:
-    """从指定 universe 文件加载股票代码。"""
+def _read_universe_file(file: str) -> list[str]:
+    """读取 universe 文件（纯代码列表，# 开头为注释）。"""
+    f = ROOT / "data" / "universe" / file
+    if not f.exists():
+        return []
+    return [line.strip() for line in f.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")]
+
+
+def _pool_symbols(region: str, file: str, exclude_files: list[str] | None = None) -> list[str]:
+    """从指定 universe 文件加载标的，可排除其他清单中已有的同名代码。
+
+    ETF 与股票共用 us/ 命名空间，同名代码会互相覆盖，故 ETF 池需排除
+    us.csv 中已存在的代码（etf.csv 误收录了 O/ORCL/PSN/PSX/STAG 等普通股）。
+    """
     uni_file = ROOT / "data" / "universe" / file
     if not uni_file.exists():
         print(f"[WARN] universe 文件不存在: {uni_file}")
         return []
-    return [line.strip() for line in uni_file.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.startswith("#")]
+    symbols = _read_universe_file(file)
+    if exclude_files:
+        dropped: set[str] = set()
+        for ef in exclude_files:
+            dropped |= set(_read_universe_file(ef))
+        before = len(symbols)
+        symbols = [s for s in symbols if s not in dropped]
+        if before != len(symbols):
+            print(f"  {file}: 排除与 {exclude_files} 同名的 {before - len(symbols)} 个代码 "
+                  f"（剩余 {len(symbols)}）", flush=True)
+    return symbols
 
 
 def fetch_one(tv, region: str, symbol: str, interval: str, exchanges: list[str],
@@ -219,18 +255,21 @@ def fetch_one(tv, region: str, symbol: str, interval: str, exchanges: list[str],
 
 
 def sync_pool(tv, pool_name: str) -> dict:
-    """同步一个池（高频或低频）。
+    """同步一个池。
 
-    pool_name: "high" / "low"
+    pool_name: "high" 高频 / "low" 低频 / "etf" ETF
     """
-    pool_cfg = HIGH_POOL if pool_name == "high" else LOW_POOL
+    pool_cfg = POOLS.get(pool_name)
+    if pool_cfg is None:
+        print(f"[WARN] 未知池: {pool_name}，可选: {list(POOLS)}")
+        return {"pool": pool_name, "symbols": 0, "ok": 0, "skip": 0}
     ok = skip = 0
     total_symbols = 0
     for region in SYNC_REGIONS:
         cfg = pool_cfg.get(region)
         if not cfg:
             continue
-        symbols = _pool_symbols(region, cfg["file"])
+        symbols = _pool_symbols(region, cfg["file"], cfg.get("exclude"))
         if not symbols:
             continue
         total_symbols += len(symbols)
@@ -260,17 +299,37 @@ def sync_pool(tv, pool_name: str) -> dict:
     return {"pool": pool_name, "symbols": total_symbols, "ok": ok, "skip": skip}
 
 
+# TV_POOL_TYPE 组合 -> 实际启用的池（顺序即执行顺序）
+_POOL_COMBOS = {
+    "both": ["low", "high"],
+    "all": ["low", "etf", "high"],
+}
+
+
+def _active_pools(pool_type: str | None = None) -> list[str]:
+    """解析 TV_POOL_TYPE 为实际启用的池列表。"""
+    pt = (pool_type or POOL_TYPE).strip().lower()
+    if pt in _POOL_COMBOS:
+        return _POOL_COMBOS[pt]
+    if pt in POOLS:
+        return [pt]
+    if pt == "none":
+        return []
+    print(f"[WARN] 未知 TV_POOL_TYPE={pt}，可选: {list(POOLS)} / both / all / none，回退 high")
+    return ["high"]
+
+
 def sync_loop_once(pool_type: str) -> None:
     """执行一轮同步（按池类型）。"""
+    pools = _active_pools(pool_type)
+    if not pools:
+        return
     try:
         tv = TvDatafeed()
-        if pool_type == "both":
-            sync_pool(tv, "low")
-            sync_pool(tv, "high")
-        else:
-            sync_pool(tv, pool_type)
+        for p in pools:
+            sync_pool(tv, p)
         print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] "
-              f"{pool_type}池 本轮同步完成", flush=True)
+              f"{pool_type} 本轮同步完成", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"[ERROR] 同步异常: {exc}", flush=True)
 
@@ -280,22 +339,33 @@ def sync_loop_once(pool_type: str) -> None:
 _sync_thread: threading.Thread | None = None
 _sync_running = False
 
-# 各池的同步间隔（分钟）：高频 1 分钟，低频 30 分钟
-_POOL_INTERVAL_MIN = {"high": 1, "low": 30}
+# 各池的同步间隔（分钟）兜底值：高频 1 分钟，低频 30 分钟，ETF 3 小时
+_POOL_INTERVAL_MIN = {"high": 1, "low": 30, "etf": 180}
+
+
+def _pool_interval_min(pool: str) -> int:
+    """池同步间隔（分钟）：优先读池配置的 sync_min，缺失时用兜底表。"""
+    cfg = POOLS.get(pool) or {}
+    for region in SYNC_REGIONS:
+        c = cfg.get(region)
+        if c and c.get("sync_min"):
+            return int(c["sync_min"])
+    return _POOL_INTERVAL_MIN.get(pool, 30)
 
 
 def _worker():
     global _sync_running
     _sync_running = True
     last_sync: dict[str, float] = {}
+    pools = _active_pools()
     # 启动先各同步一次
-    for pool in (["low", "high"] if POOL_TYPE == "both" else [POOL_TYPE]):
+    for pool in pools:
         sync_loop_once(pool)
         last_sync[pool] = time.time()
     while _sync_running:
         time.sleep(5)  # 轻量轮询
-        for pool in (["low", "high"] if POOL_TYPE == "both" else [POOL_TYPE]):
-            interval = _POOL_INTERVAL_MIN.get(pool, 30) * 60
+        for pool in pools:
+            interval = _pool_interval_min(pool) * 60
             if time.time() - last_sync.get(pool, 0) >= interval:
                 sync_loop_once(pool)
                 last_sync[pool] = time.time()
@@ -306,8 +376,10 @@ def start_background_sync() -> None:
     global _sync_thread
     if _sync_thread and _sync_thread.is_alive():
         return
-    print(f"启动后台采集线程: 池类型={POOL_TYPE} "
-          f"(高频1分钟/低频30分钟)", flush=True)
+    pools = _active_pools()
+    detail = " / ".join(f"{p} {_pool_interval_min(p)}分钟" for p in pools) or "无"
+    print(f"启动后台采集线程: 池类型={POOL_TYPE} → [{', '.join(pools) or 'none'}] "
+          f"({detail})", flush=True)
     _sync_thread = threading.Thread(target=_worker, daemon=True)
     _sync_thread.start()
 

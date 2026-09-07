@@ -17,9 +17,11 @@ gzip 压缩写入独立的 R2 bucket：stocks-tv。
 用法：
     export R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
     export R2_BUCKET=stocks-tv
-    python scripts/fetch_tv.py --region us              # 全部周期
-    python scripts/fetch_tv.py --region us --interval 1h  # 只拉1h
-    python scripts/fetch_tv.py --region us --limit 20    # 只拉20只测试
+    python scripts/fetch_tv.py --region us                    # 默认清单 us
+    python scripts/fetch_tv.py --universe etf                 # 只采 ETF
+    python scripts/fetch_tv.py --universe us,etf              # 股票 + ETF（自动去重）
+    python scripts/fetch_tv.py --region us --interval 1h      # 只拉1h
+    python scripts/fetch_tv.py --universe etf --limit 20      # 只拉20只测试
 
 依赖：
     pip install tvdatafeed  # 从 GitHub: git+https://github.com/rongardF/tvdatafeed.git
@@ -30,6 +32,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import io
+import json
 import os
 import sys
 import time
@@ -71,6 +74,44 @@ DEFAULT_BARS = {
 
 # 并发（TradingView WS 单连接，内部串行；多 symbol 用一个连接）
 CONCURRENCY = int(os.environ.get("FETCH_CONCURRENCY", "4"))
+
+# 可选股票清单：名称 -> universe 文件名
+UNIVERSE_FILES = {
+    "us": "us.csv",              # 罗素1000 ~1022 只
+    "etf": "etf.csv",            # 美股 ETF ~830 只
+    "nasdaq100": "nasdaq100.csv",
+    "sp500": "sp500.csv",
+}
+
+
+def load_universe(names: list[str]) -> list[str]:
+    """按名称加载并合并多个清单（跨清单去重、保序）。
+
+    注意：etf.csv 与 us.csv 存在少量同名代码（如 ORCL/PSX/STAG，
+    本质是普通股被误收录进 ETF 清单）。二者共用 us/ 命名空间，
+    若重复采集会互相覆盖。这里按传入顺序去重，先出现的清单优先。
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        fname = UNIVERSE_FILES.get(name)
+        if not fname:
+            print(f"[WARN] 未知清单: {name}，可选: {list(UNIVERSE_FILES)}")
+            continue
+        f = ROOT / "data" / "universe" / fname
+        if not f.exists():
+            print(f"[WARN] universe 文件不存在: {f}")
+            continue
+        syms = [l.strip() for l in f.read_text(encoding="utf-8").splitlines()
+                if l.strip() and not l.startswith("#")]
+        added = 0
+        for s in syms:
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+                added += 1
+        print(f"  清单 {name} ({fname}): {len(syms)} 只 → 新增 {added} 只，累计 {len(out)} 只")
+    return out
 
 
 def gzip_bytes(data: bytes) -> bytes:
@@ -143,9 +184,13 @@ def fetch_one(tv, region: str, symbol: str, interval: str, exchanges: list[str])
 def main() -> int:
     parser = argparse.ArgumentParser(description="TradingView 数据采集（独立管道）")
     parser.add_argument("--region", default="us", help="区域（目前仅 us）")
+    parser.add_argument("--universe", default="us",
+                        help=f"股票清单，逗号分隔。可选: {list(UNIVERSE_FILES)}（默认 us）")
     parser.add_argument("--interval", default="all", help="周期：all / 1d / 1m / 5m / 15m / 30m / 1h / 1wk / 1mo")
     parser.add_argument("--limit", type=int, default=0, help="限制拉取股票数（0=全部）")
     args = parser.parse_args()
+
+    uni_names = [n.strip() for n in args.universe.split(",") if n.strip()]
 
     # 选择周期
     if args.interval == "all":
@@ -156,17 +201,16 @@ def main() -> int:
             return 1
         intervals = [args.interval]
 
-    # 美股代码清单
-    uni_file = ROOT / "data" / "universe" / "us.csv"
-    if not uni_file.exists():
-        print(f"❌ universe 文件不存在: {uni_file}")
+    # 股票代码清单（支持多清单合并去重）
+    symbols = load_universe(uni_names)
+    if not symbols:
+        print(f"❌ 未加载到任何代码，检查 --universe: {args.universe}")
         return 1
-    symbols = [line.strip() for line in uni_file.read_text(encoding="utf-8").splitlines()
-               if line.strip() and not line.startswith("#")]
     if args.limit > 0:
         symbols = symbols[:args.limit]
 
-    print(f"=== TradingView 采集 region={args.region} 周期={intervals} 股票={len(symbols)} ===")
+    print(f"=== TradingView 采集 region={args.region} 清单={uni_names} "
+          f"周期={intervals} 标的={len(symbols)} ===")
     print(f"时间: {datetime.now(timezone.utc).isoformat()}")
     print("连接 TradingView...")
 
@@ -199,10 +243,16 @@ def main() -> int:
                         print(f"  [ERR] {r['symbol']} {interval}: {r['status']}")
         print(f"  {interval}: ok={ok} skip={skip} err={err} bars={total_bars}")
 
-    # 状态
-    r2s3.put_obj("_status.json",
-                 (f'{{"source":"tradingview","completed_at":"{datetime.now(timezone.utc).isoformat()}",'
-                  f'"region":"{args.region}","intervals":{intervals},"symbols":{len(symbols)}}}').encode(),
+    # 状态（用 json.dumps 保证 intervals/universe 是合法 JSON，而非 Python 字面量）
+    status = {
+        "source": "tradingview",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "region": args.region,
+        "universe": uni_names,
+        "intervals": intervals,
+        "symbols": len(symbols),
+    }
+    r2s3.put_obj("_status.json", json.dumps(status, ensure_ascii=False).encode("utf-8"),
                  content_type="application/json")
     print("\n✅ TradingView 采集完成")
     return 0

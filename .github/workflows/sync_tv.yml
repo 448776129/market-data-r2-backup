@@ -9,6 +9,10 @@ name: Sync TradingView Data
 #   2. gzip 压缩写入 R2 stocks-tv
 #
 # 频率：每 30 分钟增量；全量由 workflow_dispatch 手动触发
+#
+# 注意：ETF（etf.csv）由独立的 sync_tv_etf.yml 采集（每天 2 次），
+#   避免 826 只 ETF 挤占本 workflow 的 30 分钟窗口。
+#   需要临时在本 workflow 采 ETF 时，手动触发并选择 universe=etf/all。
 
 on:
   schedule:
@@ -23,6 +27,15 @@ on:
         type: choice
         options:
           - us
+      universe:
+        description: "清单：us=股票（默认）/ etf=ETF / all=两者"
+        required: false
+        default: "us"
+        type: choice
+        options:
+          - us
+          - etf
+          - all
       interval:
         description: "周期：all=全部 / 单周期"
         required: false
@@ -61,4 +74,7 @@ jobs:
           R2_BUCKET: stocks-tv
         run: |
           INTERVAL="${{ github.event.inputs.interval || 'all' }}"
-          python scripts/fetch_tv.py --region us --interval "$INTERVAL"
+          UNIVERSE="${{ github.event.inputs.universe || 'us' }}"
+          # fetch_tv.py 的 --universe 收逗号分隔清单名，all 需展开
+          if [ "$UNIVERSE" = "all" ]; then UNIVERSE="us,etf"; fi
+          python scripts/fetch_tv.py --region us --universe "$UNIVERSE" --interval "$INTERVAL"
