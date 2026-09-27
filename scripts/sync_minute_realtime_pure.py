@@ -382,7 +382,9 @@ def sync_one(region: str, symbol: str) -> dict:
             ])
         put_csv_gz(region, symbol, "1m", csv_rows)
 
-        # 重采样 5m/15m/30m/1h（合并已有派生数据，避免覆盖丢历史）
+        # 重采样 5m/15m/30m/1h
+        # 5m/15m/30m 与 1m 同窗口（5天），1m 覆盖写后重采样覆盖无损 → 直接写（省 R2 读）
+        # 1h 有 6 个月历史（来自 sync_incremental），必须合并去重保留
         for derived, minutes in RESAMPLE_MIN.items():
             agg = resample_1m(rows, minutes)
             if not agg:
@@ -394,7 +396,10 @@ def sync_one(region: str, symbol: str) -> dict:
                     _fmt(r["open"]), _fmt(r["high"]), _fmt(r["low"]), _fmt(r["close"]),
                     _fmt(r["adjclose"]), _fmt(r["volume"]),
                 ])
-            _merge_derived(region, symbol, derived, d_rows)
+            if derived == "1h":
+                _merge_derived(region, symbol, derived, d_rows)
+            else:
+                put_csv_gz(region, symbol, derived, d_rows)
 
         result["rows"] = len(rows)
         result["status"] = "ok"

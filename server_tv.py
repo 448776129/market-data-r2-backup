@@ -230,8 +230,13 @@ def _pool_symbols(region: str, file: str, exclude_files: list[str] | None = None
 
 
 def fetch_one(tv, region: str, symbol: str, interval: str, exchanges: list[str],
-              n_bars: int | None = None) -> dict:
-    """拉取单只股票单周期并增量合并写入 R2。"""
+              n_bars: int | None = None, merge_mode: str = "overwrite") -> dict:
+    """拉取单只股票单周期并写入 R2。
+
+    merge_mode:
+      "overwrite" — 直接覆盖写入（不读旧数据，省 R2 读额度，适合高频增量）
+      "merge"     — 读旧数据合并去重（保留历史，适合低频/首次全量）
+    """
     tv_interval, subdir = TV_INTERVALS[interval]
     if n_bars is None:
         n_bars = DEFAULT_BARS[interval]
@@ -243,9 +248,13 @@ def fetch_one(tv, region: str, symbol: str, interval: str, exchanges: list[str],
                              interval=tv_interval, n_bars=n_bars)
             if df is not None and len(df) > 0:
                 new_csv = df_to_csv(df)
-                existing = load_csv_gz(region, symbol, subdir)
-                merged = merge_csv(existing, new_csv)
-                put_csv_gz(region, symbol, subdir, merged)
+                if merge_mode == "merge":
+                    existing = load_csv_gz(region, symbol, subdir)
+                    merged = merge_csv(existing, new_csv)
+                    put_csv_gz(region, symbol, subdir, merged)
+                else:
+                    # 直接覆盖（省一次 R2 读）
+                    put_csv_gz(region, symbol, subdir, new_csv)
                 result["bars"] = len(df)
                 return result
         except Exception:
@@ -279,12 +288,14 @@ def sync_pool(tv, pool_name: str) -> dict:
               f"{pool_name}池 {region} 同步 {len(symbols)} 只, 周期={intervals}",
               flush=True)
         # 分批轮询：防止 TV WS 断连
+        # 高频池用 overwrite（省 R2 读），低频/etf 池用 merge（保留历史）
+        merge_mode = "overwrite" if pool_name == "high" else "merge"
         for i in range(0, len(symbols), BATCH_SIZE):
             batch = symbols[i:i + BATCH_SIZE]
             for interval in intervals:
                 for sym in batch:
                     try:
-                        r = fetch_one(tv, region, sym, interval, US_EXCHANGES, n_bars)
+                        r = fetch_one(tv, region, sym, interval, US_EXCHANGES, n_bars, merge_mode=merge_mode)
                         if r["status"] == "ok":
                             ok += 1
                         else:
