@@ -119,18 +119,20 @@ def _sigv4(method: str, path: str, payload: bytes) -> tuple[str, dict[str, str]]
 
 def _url_for(key: str) -> str:
     import urllib.parse
-    return f"{_endpoint()}/{_bucket()}/{urllib.parse.quote(key, safe='')}"
+    # key 中的 '/' 必须保留为路径分隔符：编码成 %2F 会与 SigV4 的
+    # canonical path 不一致，R2 会返回 403 SignatureDoesNotMatch。
+    return f"{_endpoint()}/{_bucket()}/{urllib.parse.quote(key, safe='/')}"
 
 
 def _request(method: str, key: str, payload: bytes | None = None,
              content_type: str | None = None,
              content_encoding: str | None = None) -> urllib.response.addinfourl:
     """发起签名请求。"""
-    url = _url_for(key)
-    path = f"/{_bucket()}/" + key.split("/")[-1]  # path 仅含 key 最简形式
-    # SigV4 的 canonical path 需要完整 path
     import urllib.parse
+    # 签名用的 canonical path 必须与实际请求 URL 的 path 完全一致。
+    # 之前 _url_for 把 '/' 编码成 %2F，而这里保留 '/'，导致 R2 403。
     path = f"/{_bucket()}/" + urllib.parse.quote(key, safe="/")
+    url = f"{_endpoint()}{path}"
     if payload is None:
         payload = b""
     auth, sig_headers = _sigv4(method, path, payload)
