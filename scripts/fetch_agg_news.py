@@ -322,33 +322,55 @@ def _fingerprint(data: dict) -> str:
     return hashlib.md5(body.encode("utf-8")).hexdigest()
 
 
+# Cloudflare 账号未开通 R2 时，R2 会返回 NotEntitled。
+# 这种情况下自动降级为 KV 单写，避免定时 workflow 每半小时失败一次。
+_r2_not_entitled = False
+
+
+def _r2_disabled(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and "NotEntitled" in str(exc)
+
+
 def write_if_changed(key: str, data: dict) -> bool:
     """R2 写入口：指纹相同跳过 → 否则双写 R2 + KV。
 
-    - R2:  作为最终持久化 + 状态指纹文件（_state/news_*.fp）
-    - KV：  作为 Worker 读入口（KV 读相比 R2 更省 Worker 配额，延迟更低）
+    R2 未开通（NotEntitled）时自动降级：指纹与数据都写 KV，不影响采集主流程。
     """
+    global _r2_not_entitled
+
     name = key.replace("news/", "").replace(".json", "")
     state_key = f"_state/news_{name}.fp"
+    kv_key = f"news:{name}"          # news:yh / news:em
+    kv_fp_key = f"news:{name}.fp"    # R2 不可用时的指纹存放处
     new_fp = _fingerprint(data)
 
-    # 读旧指纹
-    old_fp_bytes = r2store.get_bytes(state_key)
-    old_fp = old_fp_bytes.decode("ascii").strip() if old_fp_bytes else None
+    # 读旧指纹：优先 R2，R2 未开通时回退 KV
+    r2_ok = True
+    try:
+        old_fp_bytes = r2store.get_bytes(state_key)
+        old_fp = old_fp_bytes.decode("ascii").strip() if old_fp_bytes else None
+    except RuntimeError as exc:
+        if not _r2_disabled(exc):
+            raise
+        r2_ok = False
+        _r2_not_entitled = True
+        print(f"  [warn] R2 未开通，降级为 KV 存储: {exc}", flush=True)
+        old_fp = kvstore.get(kv_fp_key)
 
     if old_fp == new_fp:
         print(f"  [skip] {key}: 内容指纹未变 ({new_fp[:10]})")
         return False
 
-    # 写入数据 + 写入指纹
     payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    r2store.put_bytes(key, payload, content_type="application/json; charset=utf-8")
-    r2store.put_bytes(state_key, new_fp.encode("ascii"), content_type="text/plain; charset=utf-8")
 
-    # 同步 KV：Worker 读优先走 KV，省 R2 Class B + Worker CPU。
-    # KV 凭据缺失时静默跳过，不影响主流程（Worker 会回退读 R2）。
-    kv_key = f"news:{name}"  # news:yh / news:em
+    if r2_ok:
+        r2store.put_bytes(key, payload, content_type="application/json; charset=utf-8")
+        r2store.put_bytes(state_key, new_fp.encode("ascii"), content_type="text/plain; charset=utf-8")
+
+    # KV 始终写：Worker 读优先走 KV，省 R2 配额。
     kv_ok = kvstore.put_bytes(kv_key, payload, content_type="application/json; charset=utf-8")
+    if not r2_ok:
+        kv_ok = kvstore.put(kv_fp_key, new_fp) and kv_ok
     kv_str = f" KV→{'ok' if kv_ok else 'skip'}"
 
     print(f"  [write] {key}: {len(payload)//1024} KB, 指纹 {old_fp[:10] if old_fp else 'null'} -> {new_fp[:10]}{kv_str}")
@@ -381,8 +403,19 @@ def main() -> int:
         print(f"      ✗ 东方财富 失败: {e!r}")
         traceback.print_exc()
 
-    # 更新状态
-    r2store.put_status({"last_run": _now_iso(), "modules_ok": f"{ok}/2", "last_error": None})
+    # 更新状态：R2 未开通时只打警告，不让整个 workflow 失败。
+    last_error = "R2 未开通(NotEntitled)，数据仅写入 KV" if _r2_not_entitled else None
+    try:
+        r2store.put_status({
+            "last_run": _now_iso(),
+            "modules_ok": f"{ok}/2",
+            "last_error": last_error,
+        })
+    except RuntimeError as exc:
+        if not _r2_disabled(exc):
+            raise
+        print(f"  [warn] 状态写入跳过: {exc}", flush=True)
+
     return 0 if ok == 2 else 2
 
 
