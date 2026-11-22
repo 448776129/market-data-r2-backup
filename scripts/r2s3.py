@@ -148,7 +148,14 @@ def _request(method: str, key: str, payload: bytes | None = None,
         headers["Content-Encoding"] = content_encoding
 
     req = urllib.request.Request(url, data=payload, method=method, headers=headers)
-    return urllib.request.urlopen(req, timeout=_TIMEOUT)
+    try:
+        return urllib.request.urlopen(req, timeout=_TIMEOUT)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise
+        # 把 R2 返回的 XML 错误码带出来，便于定位签名/权限/凭据问题。
+        detail = exc.read().decode("utf-8", errors="replace")[:800]
+        raise RuntimeError(f"R2 {method} {key} 返回 HTTP {exc.code}: {detail}") from exc
 
 
 def get_obj(key: str) -> bytes | None:
