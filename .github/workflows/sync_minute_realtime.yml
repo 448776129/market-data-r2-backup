@@ -81,3 +81,21 @@ jobs:
           YAHOO_DIRECT: "1"
         run: python scripts/sync_minute_realtime_pure.py --index nasdaq100 --region us
 
+  trigger-news-fetch:
+    name: 唤醒新闻采集
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: dispatch news-aggregator
+        env:
+          DISPATCH_TOKEN: ${{ secrets.NEWS_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DISPATCH_TOKEN" ]; then echo "缺少 NEWS_DISPATCH_TOKEN，跳过"; exit 0; fi
+          code=$(curl -s -o /tmp/r -w "%{http_code}" -X POST \
+            -H "Authorization: token $DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/448776129/news-aggregator/actions/workflows/daily-news.yml/dispatches \
+            -d '{"ref":"main"}')
+          echo "dispatch HTTP $code"
+          cat /tmp/r || true
+          case "$code" in 204|409|422) exit 0 ;; *) exit 1 ;; esac
